@@ -251,14 +251,13 @@ path the bucket itself can stay private.
   salt + memory-hard work factor) as defense in depth against sidecar exfiltration.
 - **Recipient:** likewise transmitted to the service in cleartext by SHL design, so
   recipient logging (`audit`) is opt-in to keep that metadata off the host by default.
-- **Nonce uniqueness (client requirement):** generate a **random 96-bit IV from a
-  CSPRNG for every encryption, with a hard limit of ~2³² messages per key, then
-  rotate keys** — the simplest correct option. shlep's reference client does this
-  and goes further: a **fresh content key per share**, so each key encrypts one
-  message and IV collisions can't arise. `encryptCompact` always mints a fresh
-  random IV with no way to pin one, so the SHL unique-nonce requirement is met
-  structurally, not by convention. Clients can adopt `src/crypto.ts` +
-  `src/client.ts` directly or translate them.
+- **Nonce uniqueness (client requirement):** AES-GCM needs a unique IV per
+  encryption under a given key. Use a **random 96-bit IV from a CSPRNG, cap a key
+  at ~2³² messages, then rotate keys** — the simplest correct option. In shlep this
+  is moot anyway: each share is independent and gets its own key (as it must),
+  encrypted exactly once, so within-key IV reuse can't even arise. `encryptCompact`
+  always mints a fresh random IV and offers no way to pin one. Clients can adopt
+  `src/crypto.ts` + `src/client.ts` or translate them.
 - **Unguessable ids:** 128-bit random, base64url (keeps the shlink `url` short).
 - **Enumeration resistance:** uniform 404 for non-servable links and for wrong
   capability tokens.
