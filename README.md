@@ -71,7 +71,7 @@ const sealed = await encryptBundle(JSON.stringify(bundle));   // {jwe, key, keyB
 const res = await fetch("https://shl.example.com/shares", {
   method: "POST",
   headers: { "content-type": "application/json" },
-  body: JSON.stringify({ ciphertext: sealed.jwe, policy: { maxUses: 5, audit: true, label: "Cycle export" } }),
+  body: JSON.stringify({ ciphertext: sealed.jwe, policy: { maxUses: 5, audit: true } }),
 }).then((r) => r.json());                                     // {id, fileUrl, manageToken}
 
 // 3. CLIENT composes the link with its own key — show as QR + copy/share.

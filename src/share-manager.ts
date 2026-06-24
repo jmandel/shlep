@@ -119,7 +119,6 @@ export class ShareManager {
         flag: "U",
         cipherKey: this.cipherKeyFor(id),
         cipherLen: cipherBytes.length,
-        label: policy.label,
         exp: policy.exp,
         maxUses: policy.maxUses,
         audit: policy.audit === true ? true : undefined,
@@ -224,7 +223,7 @@ export class ShareManager {
   private async fetchCipher(record: ShareRecord): Promise<ResolveResult> {
     const obj = await this.store.get(record.cipherKey);
     if (!obj) throw Errors.notServable();
-    return { jwe: tdDecode(obj.bytes).trim(), label: record.label, contentType: "application/jose" };
+    return { jwe: tdDecode(obj.bytes).trim(), contentType: "application/jose" };
   }
 
   // ---------- control plane (capability-token authed) ----------
@@ -316,7 +315,6 @@ export class ShareManager {
       status: this.effectiveStatus(r),
       createdAt: r.createdAt,
       flag: r.flag,
-      label: r.label,
       exp: r.exp,
       maxUses: r.maxUses,
       audit: r.audit === true,

@@ -27,7 +27,7 @@ describe("blind round-trip", () => {
   test("the manager only ever sees ciphertext; receiver decrypts with the fragment key", async () => {
     const { mgr } = mk();
     const sealed = await encryptBundle(BUNDLE); // key born client-side
-    const res = await mgr.create({ ciphertext: sealed.jwe, policy: { label: "demo" } });
+    const res = await mgr.create({ ciphertext: sealed.jwe });
 
     expect(res.fileUrl).toBe(`https://shl.example.com/shl/${res.id}`);
     expect(res.manageToken).toBeTruthy();

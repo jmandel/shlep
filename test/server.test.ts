@@ -20,7 +20,7 @@ describe("http", () => {
       new Request("http://t/shares", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ciphertext: sealed.jwe, policy: { label: "x" } }),
+        body: JSON.stringify({ ciphertext: sealed.jwe }),
       }),
     );
     expect(created.status).toBe(201);

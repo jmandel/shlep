@@ -28,12 +28,6 @@ export interface SharePolicy {
   exp?: number;
   /** Max successful resolves before exhaustion (requires a CAS-capable backend). */
   maxUses?: number;
-  /**
-   * Human label (<=80 chars). NOTE: storing it here is a small metadata leak to
-   * the host — the authoritative label rides in the link fragment. Blind-strict
-   * clients should omit it.
-   */
-  label?: string;
   /** Optional passcode. Stored only as a hash; never echoed. */
   passcode?: string;
   /**
@@ -60,7 +54,6 @@ export interface ShareRecord {
   flag: string; // SHL flags; "U" = the direct-file retrieval rail (GET)
   cipherKey: string; // object-store key of the ciphertext
   cipherLen: number;
-  label?: string;
   exp?: number;
   maxUses?: number;
   audit?: boolean;
@@ -76,7 +69,6 @@ export interface ShareView {
   status: EffectiveStatus;
   createdAt: number;
   flag: string;
-  label?: string;
   exp?: number;
   maxUses?: number;
   audit: boolean;
@@ -126,7 +118,6 @@ export interface ResolveOptions {
 
 export interface ResolveResult {
   jwe: string;
-  label?: string;
   contentType: string; // always "application/jose"
 }
 

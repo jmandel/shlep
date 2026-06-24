@@ -72,7 +72,9 @@ exhausted, paused) returns a **uniform 404** so existence never leaks.
 | `POST /shares/:id/limits` | `{maxUses}` | change use-limit |
 | `GET /shares/:id/log` | — | recipient access log (entries exist only if `audit`) |
 
-`policy` = `{ exp?, maxUses?, label?, passcode?, audit? }`. There is deliberately
+`policy` = `{ exp?, maxUses?, passcode?, audit? }`. (No `label` — the human label
+lives only in the link fragment, set client-side; the service never receives it.)
+There is deliberately
 **no list-all / admin endpoint**: the service is account-less and never enumerates
 shares. An operator who needs to inspect or sweep the bucket uses the cloud's own
 tooling out-of-band — the service exposes no privileged enumeration.
@@ -228,9 +230,16 @@ path the bucket itself can stay private.
 
 ## 7. Security & privacy
 
-- **Blind host:** ciphertext + hashed token + opaque metadata only; the key and
-  plaintext never arrive. The optional `label` is the one metadata leak — omit it
-  (it rides in the link) for blind-strict deployments.
+- **Blind host:** ciphertext + hashed token + opaque metadata only; the key,
+  plaintext, and the human label never arrive. The label is carried only in the
+  link fragment (client-side); the service stores none of it.
+- **Irreducible metadata:** what the host *must* hold to enforce controls —
+  existence, `status`, `exp`, `maxUses`/`useCount`, `cipherLen`, and the token
+  hash. Nothing human-readable beyond that. `createdAt` is the one convenience
+  field (the object store already records it).
+- **Inherently host-visible (by SHL design):** a `passcode` is transmitted to the
+  service by the receiver on each resolve, and `recipient` likewise — so neither
+  is hidden from the host. `audit` (recipient logging) is therefore opt-in.
 - **Unguessable ids:** 128-bit random, base64url (keeps the shlink `url` short).
 - **Enumeration resistance:** uniform 404 for non-servable links and for wrong
   capability tokens.

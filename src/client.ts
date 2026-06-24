@@ -30,6 +30,7 @@ export async function encryptBundle(plaintext: string, opts: { deflate?: boolean
 
 export interface LinkOptions {
   flag?: string; // default "U" (direct-file rail)
+  /** Human label. Travels in the link fragment only; the service never sees it. */
   label?: string;
   exp?: number;
 }
