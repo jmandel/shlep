@@ -132,12 +132,20 @@ describe("controls", () => {
     expect((await catchErr(mgr.resolveManifest(res.id, { recipient: "r", passcode: "1234" }))).httpStatus).toBe(404);
   });
 
-  test("correct passcode serves the manifest", async () => {
-    const { mgr } = mk();
+  test("correct passcode serves the manifest and resets the failure budget", async () => {
+    const { mgr } = mk({ maxPasscodeFailures: 3 });
     const sealed = await encryptBundle(BUNDLE);
     const res = await mgr.create({ ciphertext: sealed.jwe, policy: { passcode: "1234" } });
-    const m = await mgr.resolveManifest(res.id, { recipient: "r", passcode: "1234" });
+
+    // burn 2 of 3, then a correct passcode resets the counter
+    expect((await catchErr(mgr.resolveManifest(res.id, { recipient: "r", passcode: "x" }))).body as any).toMatchObject({ remainingAttempts: 2 });
+    await catchErr(mgr.resolveManifest(res.id, { recipient: "r", passcode: "x" })); // remaining 1
+    const m = await mgr.resolveManifest(res.id, { recipient: "r", passcode: "1234" }); // success -> reset
     expect(await openSealed(m.files[0]!.embedded!, sealed.key)).toBe(BUNDLE);
+    expect((await mgr.get(res.id, res.manageToken)).status).toBe("active");
+
+    // budget is back to full: a fresh wrong attempt shows remaining 2 again
+    expect((await catchErr(mgr.resolveManifest(res.id, { recipient: "r", passcode: "x" }))).body as any).toMatchObject({ remainingAttempts: 2 });
   });
 
   test("passcode requires a CAS backend (honesty rule)", async () => {

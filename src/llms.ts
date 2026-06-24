@@ -146,8 +146,8 @@ curl -sS -X DELETE ${b}/shares/<id> -H "Authorization: Bearer <manageToken>"
   (\`contentType\`) / add-file; it is echoed in the manifest, not \`application/jose\`.
 - **U is incompatible with passcode.** A passcoded share is served by the **manifest only**;
   the GET (U) rail 404s for it. Don't mint a \`U\` link for a passcoded or multi-file share.
-- **Passcode brute-force budget:** wrong passcodes count down a lifetime limit; the 401 body is
-  \`{remainingAttempts}\`, and the link is disabled (uniform 404) once exhausted.
+- **Passcode brute-force budget:** consecutive wrong passcodes count down (default 5, reset on a
+  correct one); the 401 body is \`{remainingAttempts}\`, and the link is disabled (404) once exhausted.
 - **One-time token:** \`manageToken\` is returned once at create and never again.
 - **Unique nonce + entropy:** every encryption uses a fresh random IV with a fresh key per
   share; share ids carry 256 bits of entropy and the \`url\` stays ≤128 chars.

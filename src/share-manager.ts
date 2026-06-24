@@ -51,7 +51,7 @@ export interface ManagerConfig {
   maxEmbeddedBytes?: number;
   /** Max ciphertext size per file (DoS guard). Default 5 MiB. */
   maxFileBytes?: number;
-  /** Lifetime incorrect-passcode budget before the link is disabled (SHL). Default 100. */
+  /** Consecutive incorrect-passcode budget before the link is disabled; reset on success. Default 5. */
   maxPasscodeFailures?: number;
   /** HMAC secret for location-rail tickets. Defaults to a per-process random (single-node only). */
   ticketSecret?: string;
@@ -91,7 +91,7 @@ export class ShareManager {
     this.maxRetries = cfg.casMaxRetries ?? 8;
     this.maxEmbedded = cfg.maxEmbeddedBytes ?? 100_000;
     this.maxFileBytes = cfg.maxFileBytes ?? 5 * 1024 * 1024;
-    this.maxPasscodeFailures = cfg.maxPasscodeFailures ?? 100;
+    this.maxPasscodeFailures = cfg.maxPasscodeFailures ?? 5;
     this.ticketSecret = cfg.ticketSecret ?? randomToken();
 
     // The shlink `url` (${baseUrl}/shl/${id}) SHALL NOT exceed 128 chars. A
@@ -255,21 +255,24 @@ export class ShareManager {
       // inactive share returns a uniform 404 and never leaks via a 401 or burns
       // the passcode budget.
       if (!this.isServable(record)) throw Errors.notServable();
+      let resetFailures = false;
       if (record.passcodeHash != null) {
-        if (record.passcodeFailures >= this.maxPasscodeFailures) throw Errors.notServable(); // disabled by brute-force budget
+        if (record.passcodeFailures >= this.maxPasscodeFailures) throw Errors.notServable(); // disabled by the budget
         const ok = opts.passcode != null && (await verifyPasscode(opts.passcode, record.passcodeHash));
         if (!ok) throw Errors.passcodeRequired(await this.recordPasscodeFailure(id));
+        resetFailures = record.passcodeFailures > 0; // a correct passcode resets the consecutive-failure budget
       }
 
-      const mustWrite = record.maxUses != null || record.audit === true;
-      if (!mustWrite) return record; // read-only resolve
+      const counting = record.maxUses != null || record.audit === true;
+      if (!counting && !resetFailures) return record; // read-only resolve
 
       const next: ShareRecord = {
         ...record,
-        useCount: record.useCount + 1,
+        useCount: counting ? record.useCount + 1 : record.useCount,
         recipients: record.audit === true
           ? [...record.recipients, { at: nowSec(), recipient: opts.recipient ?? "Unknown" }].slice(-this.maxRecipients)
           : record.recipients,
+        passcodeFailures: resetFailures ? 0 : record.passcodeFailures,
       };
       if (await this.writeMeta(id, next, etag)) return next;
       // lost the CAS race — reload and retry

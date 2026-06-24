@@ -280,9 +280,12 @@ path the bucket itself can stay private.
   the service refuses the ciphertext unless it matches — a second factor on top of
   link possession, fully compatible with content-blindness (the host sees the
   passcode it enforces but still only holds unreadable ciphertext). Stored with
-  **salted scrypt**. SHL conformance: a **lifetime incorrect-attempt budget**
-  (CAS-counted, so it holds under parallel attacks; default 100, configurable) —
-  the 401 carries `{remainingAttempts}` and the link is **disabled** once exhausted.
+  **salted scrypt**. SHL conformance: an **incorrect-attempt budget** (CAS-counted,
+  so it holds under parallel attacks; default 5, configurable, **reset on a correct
+  passcode**) — the 401 carries `{remainingAttempts}` and the link is **disabled**
+  once exhausted. (Reset-on-success makes it a consecutive-failure lockout —
+  intent-preserving vs. the spec's literal "lifetime count", since an attacker never
+  succeeds and so never resets.)
   Requires a CAS backend (refused otherwise, like `maxUses`). The `U` (direct GET)
   rail is **refused** for passcoded shares (SHL: `U` SHALL NOT combine with `P`).
 - **Entropy:** share ids are **256-bit** random (SHL `url` requirement), and the
