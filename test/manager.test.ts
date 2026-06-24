@@ -23,13 +23,12 @@ async function catchErr(p: Promise<unknown>): Promise<ShlError> {
   }
 }
 
-describe("blind round-trip (mediated)", () => {
+describe("blind round-trip", () => {
   test("the manager only ever sees ciphertext; receiver decrypts with the fragment key", async () => {
     const { mgr } = mk();
     const sealed = await encryptBundle(BUNDLE); // key born client-side
-    const res = await mgr.create({ mode: "mediated", ciphertext: sealed.jwe, policy: { label: "demo" } });
+    const res = await mgr.create({ ciphertext: sealed.jwe, policy: { label: "demo" } });
 
-    expect(res.mode).toBe("mediated");
     expect(res.fileUrl).toBe(`https://shl.example.com/shl/${res.id}`);
     expect(res.manageToken).toBeTruthy();
 
@@ -100,11 +99,17 @@ describe("controls", () => {
     expect((await catchErr(mgr.resolveDirect(res.id, {}))).httpStatus).toBe(404);
   });
 
-  test("access log records recipients", async () => {
+  test("access log records recipients only when audit is on", async () => {
     const { mgr } = mk();
-    const res = await mgr.create({ ciphertext: (await encryptBundle(BUNDLE)).jwe });
-    await mgr.resolveDirect(res.id, { recipient: "Clinic A" });
-    const log = await mgr.accessLog(res.id, res.manageToken);
+    // audit off (default): unlimited share is a read-only resolve, nothing logged
+    const off = await mgr.create({ ciphertext: (await encryptBundle(BUNDLE)).jwe });
+    await mgr.resolveDirect(off.id, { recipient: "Clinic A" });
+    expect(await mgr.accessLog(off.id, off.manageToken)).toHaveLength(0);
+
+    // audit on: each resolve writes a recipient entry
+    const on = await mgr.create({ ciphertext: (await encryptBundle(BUNDLE)).jwe, policy: { audit: true } });
+    await mgr.resolveDirect(on.id, { recipient: "Clinic A" });
+    const log = await mgr.accessLog(on.id, on.manageToken);
     expect(log.at(-1)?.recipient).toBe("Clinic A");
   });
 
@@ -145,26 +150,24 @@ describe("id allocation", () => {
 
   test("create works on a non-CAS backend (head+put reservation fallback)", async () => {
     const store = new MemoryObjectStore();
-    (store as any).capabilities = { conditionalWrite: false, presign: false, lifecycle: false, publicUrl: true };
+    (store as any).capabilities = { conditionalWrite: false, presign: false, lifecycle: false };
     const mgr = new ShareManager({ store, baseUrl: "https://shl.example.com" });
     const sealed = await encryptBundle(BUNDLE);
-    const res = await mgr.create({ mode: "mediated", ciphertext: sealed.jwe });
+    const res = await mgr.create({ ciphertext: sealed.jwe });
     expect(await openSealed((await mgr.resolveDirect(res.id, {})).jwe, sealed.key)).toBe(BUNDLE);
     // use-limits are refused on a non-CAS backend (honesty rule)
     expect((await catchErr(mgr.create({ ciphertext: "x", policy: { maxUses: 2 } }))).code).toBe("unsupported_control");
   });
 });
 
-describe("direct mode", () => {
-  test("fileUrl is the object URL; revoke deletes it; counting controls refused", async () => {
-    const { store, mgr } = mk();
-    const res = await mgr.create({ mode: "direct", ciphertext: (await encryptBundle(BUNDLE)).jwe });
-    expect(res.fileUrl).toBe(store.publicUrl(`shl/c/${res.id}.jwe`));
-
-    const bad = await catchErr(mgr.create({ mode: "direct", ciphertext: "x", policy: { maxUses: 3 } }));
-    expect(bad.code).toBe("unsupported_control");
-
-    await mgr.revoke(res.id, res.manageToken);
-    expect(await store.get(`shl/c/${res.id}.jwe`)).toBeNull();
+describe("no-write fast path", () => {
+  test("an unlimited, unaudited resolve performs no sidecar write (useCount stays 0)", async () => {
+    const { mgr } = mk();
+    const res = await mgr.create({ ciphertext: (await encryptBundle(BUNDLE)).jwe });
+    await mgr.resolveDirect(res.id, { recipient: "x" });
+    await mgr.resolveDirect(res.id, { recipient: "y" });
+    const view = await mgr.get(res.id, res.manageToken);
+    expect(view.useCount).toBe(0); // read-only resolves don't bump the counter
+    expect(view.recipientCount).toBe(0);
   });
 });

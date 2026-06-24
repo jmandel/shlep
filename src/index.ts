@@ -12,7 +12,7 @@
  *
  *   S3 backend (STORE=s3):
  *     S3_BUCKET, S3_REGION, S3_ENDPOINT, S3_FORCE_PATH_STYLE=1,
- *     S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_PUBLIC_BASE,
+ *     S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY,
  *     S3_CONDITIONAL_WRITE=0   (set 0 for B2/Wasabi/GCS-via-S3)
  *
  *   bun run src/index.ts
@@ -33,7 +33,6 @@ async function buildStore(): Promise<ObjectStore> {
       forcePathStyle: env("S3_FORCE_PATH_STYLE") === "1",
       accessKeyId: env("S3_ACCESS_KEY_ID"),
       secretAccessKey: env("S3_SECRET_ACCESS_KEY"),
-      publicBase: env("S3_PUBLIC_BASE"),
       conditionalWrite: env("S3_CONDITIONAL_WRITE", "1") !== "0",
     });
   }
@@ -44,7 +43,6 @@ const baseUrl = env("BASE_URL", "http://localhost:8788")!;
 const mgr = new ShareManager({
   store: await buildStore(),
   baseUrl,
-  defaultMode: (env("DEFAULT_MODE", "mediated") as "mediated" | "direct"),
   ticketSecret: env("TICKET_SECRET"),
 });
 

@@ -4,8 +4,9 @@
 > authoritative spec is [`api-design.md`](./api-design.md), implemented in
 > `../src`. Where they differ, the api-design doc and the code win — in
 > particular the convenience/server-encrypt path described below was **removed**
-> (blind is the only path), and tenant-API-key auth was replaced by a per-share
-> capability token. Kept for the research and rationale it captured.
+> (blind is the only path), tenant-API-key auth was replaced by a per-share
+> capability token, and the two-profile (direct/mediated) split was collapsed into
+> a single service-mediated design. Kept for the research and rationale it captured.
 
 > Status: draft for review. Generated design proposal; not yet implemented.
 

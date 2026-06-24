@@ -9,7 +9,7 @@
  *     GET  /shl/:id/f/:fileId?t=       ticketed file   -> application/jose
  *
  *   CONTROL PLANE (Authorization: Bearer <manageToken>; wrong token -> 404):
- *     POST   /shares                   create -> {id,mode,status,fileUrl,manageToken}
+ *     POST   /shares                   create -> {id,status,fileUrl,manageToken}
  *     GET    /shares/:id               state
  *     DELETE /shares/:id               revoke
  *     POST   /shares/:id/pause|resume
@@ -92,7 +92,7 @@ export function createFetchHandler(mgr: ShareManager, opts: ServerOptions = {}) 
           if (opts.createToken && bearer(req) !== opts.createToken) return json({ error: "unauthorized" }, 401);
           const body = await readJson(req);
           if (typeof body.ciphertext !== "string") return json({ error: "bad_request", message: "ciphertext (compact JWE string) required" }, 400);
-          const res = await mgr.create({ mode: body.mode, ciphertext: body.ciphertext, policy: body.policy });
+          const res = await mgr.create({ ciphertext: body.ciphertext, policy: body.policy });
           return json(res, 201);
         }
         const id = seg[1];

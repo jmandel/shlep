@@ -31,8 +31,6 @@ export interface S3StoreConfig {
   forcePathStyle?: boolean; // MinIO / some S3-compatibles
   accessKeyId?: string;
   secretAccessKey?: string;
-  /** Public base for direct-mode object URLs, e.g. "https://cdn.example.com" or an R2 public domain. */
-  publicBase?: string;
   /** Set false for B2/Wasabi/GCS-via-S3 (no conditional writes). Default true. */
   conditionalWrite?: boolean;
 }
@@ -49,11 +47,9 @@ export class S3ObjectStore implements ObjectStore {
   readonly capabilities: StoreCapabilities;
   private s3: S3Client;
   private bucket: string;
-  private publicBase?: string;
 
   constructor(cfg: S3StoreConfig) {
     this.bucket = cfg.bucket;
-    this.publicBase = cfg.publicBase;
     this.s3 = new S3Client({
       region: cfg.region ?? "us-east-1",
       endpoint: cfg.endpoint,
@@ -67,7 +63,6 @@ export class S3ObjectStore implements ObjectStore {
       conditionalWrite: cfg.conditionalWrite ?? true,
       presign: true,
       lifecycle: true,
-      publicUrl: !!cfg.publicBase,
     };
   }
 
@@ -79,7 +74,6 @@ export class S3ObjectStore implements ObjectStore {
         Body: bytes,
         ContentType: opts.contentType,
         CacheControl: opts.cacheControl,
-        ACL: opts.publicRead ? "public-read" : undefined,
       }),
     );
     return { etag: out.ETag ?? "" };
@@ -134,7 +128,6 @@ export class S3ObjectStore implements ObjectStore {
           Body: bytes,
           ContentType: opts.contentType,
           CacheControl: opts.cacheControl,
-          ACL: opts.publicRead ? "public-read" : undefined,
           // create-if-absent vs replace-if-unchanged
           IfNoneMatch: expectedEtag === null ? "*" : undefined,
           IfMatch: expectedEtag !== null ? expectedEtag : undefined,
@@ -150,10 +143,5 @@ export class S3ObjectStore implements ObjectStore {
 
   async presignGet(key: string, ttlSeconds: number): Promise<string> {
     return getSignedUrl(this.s3, new GetObjectCommand({ Bucket: this.bucket, Key: key }), { expiresIn: ttlSeconds });
-  }
-
-  publicUrl(key: string): string {
-    if (!this.publicBase) throw new Error("publicBase not configured; cannot mint a direct-mode URL");
-    return `${this.publicBase.replace(/\/+$/, "")}/${key}`;
   }
 }

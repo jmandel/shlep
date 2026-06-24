@@ -106,7 +106,7 @@
       <div class="card"><div class="ic">// blind</div><h3>The host can't read it</h3><p>Ciphertext + a hashed capability token + opaque metadata. No key, no plaintext, ever.</p></div>
       <div class="card"><div class="ic">// revocable</div><h3>Take it down for real</h3><p>Expiry, use-limits, passcode, pause, and one-call revoke — enforced server-side, not just promised.</p></div>
       <div class="card"><div class="ic">// any bucket</div><h3>Bring your own storage</h3><p>One <code>ObjectStore</code> port over S3 / R2 / GCS / Azure / MinIO. No raw bucket, presign, or CORS code.</p></div>
-      <div class="card"><div class="ic">// two modes</div><h3>Direct or mediated</h3><p>Point the link at the bucket (cheap, revoke = delete) or at the service (full control plane). Same API.</p></div>
+      <div class="card"><div class="ic">// private bucket</div><h3>Storage stays sealed</h3><p>Reads flow through the service, so your bucket stays private and unlimited links are a single read — no per-fetch write.</p></div>
     </div>
   </section>
 
@@ -136,7 +136,7 @@
 <span class="c">// 2. Upload ONLY ciphertext. Get back the file URL + a one-time manage token.</span>
 <span class="k">const</span> res = <span class="k">await</span> fetch(<span class="s">"https://shlep.example/shares"</span>, {
   method: <span class="s">"POST"</span>,
-  body: JSON.stringify({ mode: <span class="s">"mediated"</span>, ciphertext: sealed.jwe, policy: { maxUses: 5 } }),
+  body: JSON.stringify({ ciphertext: sealed.jwe, policy: { maxUses: 5 } }),
 }).then(r => r.json());                                <span class="c">// {id, fileUrl, manageToken}</span>
 
 <span class="c">// 3. CLIENT composes the link with its own key — show as a QR + copy/share.</span>

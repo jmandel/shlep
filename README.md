@@ -8,9 +8,10 @@ seeing the content encryption key**.
 
 - The client encrypts; the service stores only ciphertext + a hashed capability
   token + opaque metadata. The content key lives only in the link `#fragment`.
-- Two modes, one service: **direct** (link points at the bucket object; revoke =
-  delete) and **mediated** (link points at the service; it enforces expiry,
-  use-limits, passcode, pause, revoke, and an access log).
+- Every link points at the service, which enforces expiry, use-limits, passcode,
+  pause, revoke, and an opt-in access log. A resolve reads the sidecar to enforce
+  those; it only *writes* when the share opted into `maxUses` or `audit`, so
+  unlimited links stay cheap.
 - Runs on Bun (and any Web-standard runtime; the handler is a plain `fetch`).
 
 Spec: [`docs/api-design.md`](./docs/api-design.md). Background exploration:
@@ -31,13 +32,14 @@ bun add @aws-sdk/client-s3 @aws-sdk/s3-request-presigner
 STORE=s3 S3_BUCKET=my-bucket S3_REGION=auto \
   S3_ENDPOINT=https://<acct>.r2.cloudflarestorage.com \
   S3_ACCESS_KEY_ID=… S3_SECRET_ACCESS_KEY=… \
-  S3_PUBLIC_BASE=https://files.example.com \
   BASE_URL=https://shl.example.com \
   bun run start
 ```
 
-The bucket needs a permissive CORS rule so browser viewers can fetch the
-ciphertext cross-origin (see `docs/api-design.md` §6/§7).
+The service is in the read path, so the bucket can stay **private** — browsers
+fetch the ciphertext from the service (`/shl/:id`), which sets CORS. Use a
+conditional-write-capable backend (S3/R2/MinIO) if you want `maxUses`; see
+`docs/api-design.md` §6.
 
 ## The blind flow (client ↔ service)
 
@@ -51,7 +53,7 @@ const sealed = await encryptBundle(JSON.stringify(bundle));   // {jwe, key, keyB
 const res = await fetch("https://shl.example.com/shares", {
   method: "POST",
   headers: { "content-type": "application/json" },
-  body: JSON.stringify({ mode: "mediated", ciphertext: sealed.jwe, policy: { maxUses: 5, label: "Cycle export" } }),
+  body: JSON.stringify({ ciphertext: sealed.jwe, policy: { maxUses: 5, audit: true, label: "Cycle export" } }),
 }).then((r) => r.json());                                     // {id, fileUrl, manageToken}
 
 // 3. CLIENT composes the link with its own key — show as QR + copy/share.

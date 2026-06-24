@@ -1,47 +1,47 @@
 /**
- * Core types for the bucket-based SHLink service.
+ * Core types for shlep — a blind, revocable SMART Health Link service over an
+ * object store.
  *
- * BLIND-HOST INVARIANT (the whole point): the service stores only ciphertext +
- * a hashed capability token + opaque metadata. It NEVER sees the content
- * encryption key or the plaintext. The key is derived client-side (e.g. via
- * HKDF from an owner secret) and lives only in the link fragment; the receiver
- * decrypts in their browser. The service serves opaque JWE bytes and enforces
- * link *settings* (expiry / use-limits / revoke) without ever being able to read
- * the content. This mirrors the kill-the-clipboard-skill server model.
+ * Every share's link points at the service (`${baseUrl}/shl/${id}`), and every
+ * read is resolved through it, so revocation, expiry, passcode, pause, use-limits,
+ * and an opt-in access log are all enforceable.
  *
- * A "share" is one of two modes:
- *   - "direct"   : the shlink `url` IS the bucket object. Receivers fetch storage
- *                  directly; the service is not in the read path. `?recipient=` is
- *                  accepted by the client but IGNORED by storage (documented
- *                  limitation: no per-recipient log, no use-count; revoke = delete
- *                  the object). Mode 1.
- *   - "mediated" : the shlink `url` is a service endpoint (`${baseUrl}/shl/${id}`).
- *                  The service consumes `recipient` (never forwarding it to
- *                  storage) and enforces expiry / use-limits / passcode / pause /
- *                  revoke / audit. Mode 2.
+ * BLIND-HOST INVARIANT: the service stores only ciphertext + sha256(manageToken)
+ * + opaque metadata. It never sees the content encryption key or the plaintext.
+ * The key is generated client-side and lives only in the link fragment; the
+ * receiver decrypts in their browser.
+ *
+ * COST: a resolve always READS the sidecar (to enforce revoke/expiry/passcode).
+ * It only WRITES (a CAS update to bump the counter / append the recipient) when
+ * the share opts into `maxUses` or `audit` — so an unlimited, unaudited share is
+ * a cheap read-only resolve.
  */
-
-export type ShareMode = "direct" | "mediated";
 
 /** Persisted state. Effective (servable) status is derived from this + exp/useCount. */
 export type ShareStatus = "active" | "paused" | "revoked";
 
-/** Status as reported to the holder of the capability token (adds derived terminal states). */
+/** Status as reported to the holder of the capability token (adds derived terminals). */
 export type EffectiveStatus = ShareStatus | "expired" | "exhausted";
 
 export interface SharePolicy {
-  /** Expiry, epoch seconds. Enforced in mediated mode; advisory (lifecycle hint) in direct mode. */
+  /** Expiry, epoch seconds. Enforced on every resolve. */
   exp?: number;
-  /** Max successful resolves before exhaustion. Mediated mode only. */
+  /** Max successful resolves before exhaustion (requires a CAS-capable backend). */
   maxUses?: number;
   /**
    * Human label (<=80 chars). NOTE: storing it here is a small metadata leak to
    * the host — the authoritative label rides in the link fragment. Blind-strict
-   * clients should omit it (or pass a pre-encrypted blob).
+   * clients should omit it.
    */
   label?: string;
-  /** Optional passcode (mediated only). Stored only as a hash; never echoed. */
+  /** Optional passcode. Stored only as a hash; never echoed. */
   passcode?: string;
+  /**
+   * Record each recipient (and bump the access count) on resolve. Opt-in because
+   * it (a) turns every resolve into a sidecar WRITE and (b) records recipient
+   * strings on the host — metadata a blind-strict deployment may not want.
+   */
+  audit?: boolean;
 }
 
 export interface RecipientEntry {
@@ -55,15 +55,15 @@ export interface RecipientEntry {
  */
 export interface ShareRecord {
   id: string;
-  mode: ShareMode;
   status: ShareStatus;
   createdAt: number;
-  flag: string; // SHL flags; "U" = direct-file rail
+  flag: string; // SHL flags; "U" = the direct-file retrieval rail (GET)
   cipherKey: string; // object-store key of the ciphertext
   cipherLen: number;
   label?: string;
   exp?: number;
   maxUses?: number;
+  audit?: boolean;
   useCount: number;
   manageTokenHash: string; // sha256(capability token) — the only auth the host holds
   passcodeHash?: string;
@@ -73,13 +73,13 @@ export interface ShareRecord {
 /** Holder-facing view of a record (sensitive hashes stripped, effective status added). */
 export interface ShareView {
   id: string;
-  mode: ShareMode;
   status: EffectiveStatus;
   createdAt: number;
   flag: string;
   label?: string;
   exp?: number;
   maxUses?: number;
+  audit: boolean;
   useCount: number;
   cipherLen: number;
   recipientCount: number;
@@ -95,7 +95,6 @@ export interface ShlinkPayload {
 }
 
 export interface CreateInput {
-  mode?: ShareMode;
   /**
    * The pre-encrypted compact JWE. This is the ONLY way content enters the
    * service — the client encrypts; the service stores opaque bytes and never
@@ -107,9 +106,8 @@ export interface CreateInput {
 
 export interface CreateResult {
   id: string;
-  mode: ShareMode;
   status: ShareStatus;
-  /** Where the ciphertext lives: the object URL (direct) or `${baseUrl}/shl/${id}` (mediated). */
+  /** The shlink `url`: `${baseUrl}/shl/${id}`. */
   fileUrl: string;
   /**
    * Returned ONCE, here and nowhere else. The capability to manage/revoke this
@@ -140,7 +138,7 @@ export class ShlError extends Error {
 }
 
 export const Errors = {
-  /** Used for BOTH "missing" and "wrong capability token" so existence never leaks (KTC rule). */
+  /** Used for BOTH "missing" and "wrong capability token" so existence never leaks. */
   notFound: () => new ShlError("not_found", "not found", 404),
   /** Uniform "not available" for the public data plane (hides revoked/expired/exhausted/paused). */
   notServable: () => new ShlError("not_servable", "not found", 404),
