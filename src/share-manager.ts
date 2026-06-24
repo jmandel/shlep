@@ -3,14 +3,18 @@
  * turns "host a revocable, browser-fetchable SHLink in a bucket" into method
  * calls and never exposes a raw bucket/key/presign operation.
  *
- * Blind by default: the recommended path takes pre-encrypted ciphertext and a
- * client-chosen capability token; the manager stores ciphertext + sha256(token)
- * + opaque metadata and never sees the content key or plaintext.
+ * Blind only: create takes pre-encrypted ciphertext; the manager stores
+ * ciphertext + sha256(manageToken) + opaque metadata and never sees the content
+ * key or plaintext. Clients do NOT pick the id — it is 128-bit random, minted here.
  *
- * Durability invariants (close the create/revoke atomicity question):
- *   CREATE  : write ciphertext FIRST, then the sidecar. A crash in between leaves
- *             an orphan ciphertext with no sidecar -> unresolvable (resolve reads
- *             the sidecar) and unreferenced (the id was never returned). Swept later.
+ * Durability invariants (close the create/revoke atomicity + id-conflict question):
+ *   CREATE  : RESERVE the id by writing the sidecar create-if-absent FIRST, then
+ *             write ciphertext. Reserving first makes id allocation atomic: a
+ *             (cosmically unlikely) 128-bit collision is retried with a fresh id,
+ *             never surfaced, and can never clobber an existing share's ciphertext.
+ *             A crash after the reservation but before the cipher write leaves an
+ *             orphan sidecar (unreferenced; resolves to 404) — sweepable, never
+ *             corrupting. On non-CAS backends, fall back to head+put.
  *   REVOKE  : (mediated) flip sidecar -> revoked FIRST, then delete ciphertext.
  *             Enforcement reads the sidecar, so even if the delete lags, nothing
  *             is servable. (direct) delete the object FIRST (that IS the revoke,
@@ -103,44 +107,66 @@ export class ShareManager {
     if (policy.maxUses != null && !this.store.capabilities.conditionalWrite) {
       throw Errors.unsupportedControl("maxUses", "this backend lacks conditional writes for race-safe counting");
     }
-
+    if (mode === "direct" && !(this.store.capabilities.publicUrl && this.store.publicUrl)) {
+      throw Errors.badRequest("this backend has no public object URL; use mediated mode");
+    }
     if (input.ciphertext == null) throw Errors.badRequest("`ciphertext` is required (encrypt client-side; the service is blind)");
     const cipherBytes = typeof input.ciphertext === "string" ? teEncode(input.ciphertext) : input.ciphertext;
 
-    const id = randomId();
     const token = randomToken(); // the service mints the manage token and returns it once
     const manageTokenHash = await sha256Hex(token);
+    const passcodeHash = policy.passcode != null ? await sha256Hex(policy.passcode) : undefined;
+
+    // 1) RESERVE the id by writing the sidecar create-if-absent. Clients never
+    // pick the id (it is 128-bit random, unguessable). Reserving the metadata
+    // slot first makes allocation atomic: a (cosmically unlikely) collision is
+    // retried with a fresh id, never surfaced, and — crucially — can never
+    // clobber an existing share's ciphertext (which a "ciphertext-first" write
+    // would, since the cipher key is derived from the id).
+    let id = "";
+    for (let attempt = 0; ; attempt++) {
+      if (attempt >= this.maxRetries) throw Errors.conflict();
+      id = randomId();
+      const record: ShareRecord = {
+        id,
+        mode,
+        status: "active",
+        createdAt: nowSec(),
+        flag: "U",
+        cipherKey: this.cipherKeyFor(id),
+        cipherLen: cipherBytes.length,
+        label: policy.label,
+        exp: policy.exp,
+        maxUses: policy.maxUses,
+        useCount: 0,
+        manageTokenHash,
+        passcodeHash,
+        recipients: [],
+      };
+      const body = teEncode(JSON.stringify(record));
+      const metaKey = this.metaKeyFor(id);
+      if (this.store.capabilities.conditionalWrite) {
+        if (await this.store.conditionalPut(metaKey, body, null)) break; // reserved
+        // id taken -> retry with a fresh id
+      } else if (!(await this.store.head(metaKey))) {
+        await this.store.put(metaKey, body); // no CAS available; 128-bit collision is negligible
+        break;
+      }
+    }
+
+    // 2) Write ciphertext. The id is reserved, so this can't clobber anything.
+    // A crash before this leaves an orphan sidecar (unreferenced; resolves to a
+    // 404 because the cipher is missing) — sweepable, never corrupting.
     const cipherKey = this.cipherKeyFor(id);
-
-    // 1) ciphertext FIRST (see class-header durability invariants).
-    await this.store.put(cipherKey, cipherBytes, {
-      contentType: "application/jose",
-      publicRead: mode === "direct",
-      cacheControl: mode === "direct" ? "public, max-age=31536000, immutable" : "no-store",
-    });
-
-    const record: ShareRecord = {
-      id,
-      mode,
-      status: "active",
-      createdAt: nowSec(),
-      flag: "U",
-      cipherKey,
-      cipherLen: cipherBytes.length,
-      label: policy.label,
-      exp: policy.exp,
-      maxUses: policy.maxUses,
-      useCount: 0,
-      manageTokenHash,
-      passcodeHash: policy.passcode != null ? await sha256Hex(policy.passcode) : undefined,
-      recipients: [],
-    };
-
-    // 2) sidecar create-if-absent.
-    const ok = await this.store.conditionalPut(this.metaKeyFor(id), teEncode(JSON.stringify(record)), null);
-    if (ok == null) {
-      await this.store.delete(cipherKey).catch(() => {});
-      throw Errors.conflict();
+    try {
+      await this.store.put(cipherKey, cipherBytes, {
+        contentType: "application/jose",
+        publicRead: mode === "direct",
+        cacheControl: mode === "direct" ? "public, max-age=31536000, immutable" : "no-store",
+      });
+    } catch (e) {
+      await this.store.delete(this.metaKeyFor(id)).catch(() => {}); // release the reservation
+      throw e;
     }
 
     const fileUrl = mode === "direct" ? this.directUrl(cipherKey) : `${this.baseUrl}/shl/${id}`;

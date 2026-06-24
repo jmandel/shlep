@@ -134,6 +134,27 @@ describe("manifest rail", () => {
   });
 });
 
+describe("id allocation", () => {
+  test("ids are server-minted, distinct, and unguessable-length", async () => {
+    const { mgr } = mk();
+    const a = await mgr.create({ ciphertext: (await encryptBundle(BUNDLE)).jwe });
+    const b = await mgr.create({ ciphertext: (await encryptBundle(BUNDLE)).jwe });
+    expect(a.id).not.toBe(b.id);
+    expect(a.id.length).toBeGreaterThanOrEqual(20); // 16 bytes base64url
+  });
+
+  test("create works on a non-CAS backend (head+put reservation fallback)", async () => {
+    const store = new MemoryObjectStore();
+    (store as any).capabilities = { conditionalWrite: false, presign: false, lifecycle: false, publicUrl: true };
+    const mgr = new ShareManager({ store, baseUrl: "https://shl.example.com" });
+    const sealed = await encryptBundle(BUNDLE);
+    const res = await mgr.create({ mode: "mediated", ciphertext: sealed.jwe });
+    expect(await openSealed((await mgr.resolveDirect(res.id, {})).jwe, sealed.key)).toBe(BUNDLE);
+    // use-limits are refused on a non-CAS backend (honesty rule)
+    expect((await catchErr(mgr.create({ ciphertext: "x", policy: { maxUses: 2 } }))).code).toBe("unsupported_control");
+  });
+});
+
 describe("direct mode", () => {
   test("fileUrl is the object URL; revoke deletes it; counting controls refused", async () => {
     const { store, mgr } = mk();
