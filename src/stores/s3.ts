@@ -22,6 +22,7 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { bodyToBytes } from "../bytes";
 import type { GetResult, ObjectStore, PutOptions, PutResult, StoreCapabilities } from "../object-store";
 
 export interface S3StoreConfig {
@@ -34,14 +35,6 @@ export interface S3StoreConfig {
   /** Set false for B2/Wasabi/GCS-via-S3 (no conditional writes). Default true. */
   conditionalWrite?: boolean;
 }
-
-const toBytes = async (body: any): Promise<Uint8Array> => {
-  if (!body) return new Uint8Array(0);
-  if (typeof body.transformToByteArray === "function") return new Uint8Array(await body.transformToByteArray());
-  const chunks: Uint8Array[] = [];
-  for await (const c of body as AsyncIterable<Uint8Array>) chunks.push(c);
-  return new Uint8Array(Buffer.concat(chunks));
-};
 
 export class S3ObjectStore implements ObjectStore {
   readonly capabilities: StoreCapabilities;
@@ -82,7 +75,7 @@ export class S3ObjectStore implements ObjectStore {
   async get(key: string): Promise<GetResult | null> {
     try {
       const out = await this.s3.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
-      return { bytes: await toBytes(out.Body), etag: out.ETag ?? "" };
+      return { bytes: await bodyToBytes(out.Body), etag: out.ETag ?? "" };
     } catch (e: any) {
       if (e?.$metadata?.httpStatusCode === 404 || e?.name === "NoSuchKey") return null;
       throw e;

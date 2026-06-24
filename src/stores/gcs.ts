@@ -55,7 +55,7 @@ export class GcsObjectStore implements ObjectStore {
 
   async put(key: string, bytes: Uint8Array, opts: PutOptions = {}): Promise<PutResult> {
     const f = this.file(key);
-    await f.save(Buffer.from(bytes), this.saveOpts(opts));
+    await f.save(bytes, this.saveOpts(opts));
     const [md] = await f.getMetadata();
     return { etag: String(md.generation) };
   }
@@ -96,7 +96,7 @@ export class GcsObjectStore implements ObjectStore {
     const ifGenerationMatch = expectedEtag === null ? 0 : Number(expectedEtag);
     try {
       const f = this.file(key);
-      await f.save(Buffer.from(bytes), this.saveOpts(opts, ifGenerationMatch));
+      await f.save(bytes, this.saveOpts(opts, ifGenerationMatch));
       const [md] = await f.getMetadata();
       return { etag: String(md.generation) };
     } catch (e: any) {

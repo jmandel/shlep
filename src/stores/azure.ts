@@ -13,6 +13,7 @@
  * A precondition failure surfaces as HTTP 412 (or 409 on create races) -> null.
  */
 import { BlobServiceClient, StorageSharedKeyCredential } from "@azure/storage-blob";
+import { bodyToBytes } from "../bytes";
 import type { GetResult, ObjectStore, PutOptions, PutResult, StoreCapabilities } from "../object-store";
 
 export interface AzureStoreConfig {
@@ -23,15 +24,6 @@ export interface AzureStoreConfig {
   accountUrl?: string; // https://<account>.blob.core.windows.net
   accountName?: string;
   accountKey?: string;
-}
-
-async function streamToU8(stream: NodeJS.ReadableStream | undefined): Promise<Uint8Array> {
-  if (!stream) return new Uint8Array(0);
-  const chunks: Uint8Array[] = [];
-  for await (const c of stream as AsyncIterable<Uint8Array | string>) {
-    chunks.push(typeof c === "string" ? new TextEncoder().encode(c) : new Uint8Array(c));
-  }
-  return new Uint8Array(Buffer.concat(chunks));
 }
 
 export class AzureObjectStore implements ObjectStore {
@@ -60,14 +52,14 @@ export class AzureObjectStore implements ObjectStore {
   }
 
   async put(key: string, bytes: Uint8Array, opts: PutOptions = {}): Promise<PutResult> {
-    const r = await this.blob(key).upload(Buffer.from(bytes), bytes.length, this.headers(opts));
+    const r = await this.blob(key).uploadData(bytes, this.headers(opts));
     return { etag: r.etag ?? "" };
   }
 
   async get(key: string): Promise<GetResult | null> {
     try {
       const dl = await this.blob(key).download();
-      return { bytes: await streamToU8(dl.readableStreamBody), etag: dl.etag ?? "" };
+      return { bytes: await bodyToBytes(dl.readableStreamBody), etag: dl.etag ?? "" };
     } catch (e: any) {
       if (e?.statusCode === 404) return null;
       throw e;
@@ -97,7 +89,7 @@ export class AzureObjectStore implements ObjectStore {
   async conditionalPut(key: string, bytes: Uint8Array, expectedEtag: string | null, opts: PutOptions = {}): Promise<PutResult | null> {
     const conditions = expectedEtag === null ? { ifNoneMatch: "*" } : { ifMatch: expectedEtag };
     try {
-      const r = await this.blob(key).upload(Buffer.from(bytes), bytes.length, { ...this.headers(opts), conditions });
+      const r = await this.blob(key).uploadData(bytes, { ...this.headers(opts), conditions });
       return { etag: r.etag ?? "" };
     } catch (e: any) {
       if (e?.statusCode === 412 || e?.statusCode === 409) return null; // precondition failed -> CAS lost

@@ -1,6 +1,21 @@
+import { describe, expect, test } from "bun:test";
+import { bodyToBytes } from "../src/bytes";
 import { MemoryObjectStore } from "../src/object-store";
 import { objectStoreContract } from "./conformance";
 import { azureStore, EMU, gcsStore, s3Store } from "./emulators";
+
+describe("byte bodies", () => {
+  test("bodyToBytes handles standard chunks and streams", async () => {
+    const bytes = await bodyToBytes(
+      (async function* () {
+        yield new TextEncoder().encode("ab");
+        yield "cd";
+        yield new Uint8Array([101]).buffer;
+      })(),
+    );
+    expect(new TextDecoder().decode(bytes)).toBe("abcde");
+  });
+});
 
 // The in-memory store runs the full contract in CI, always.
 objectStoreContract("memory", () => new MemoryObjectStore());

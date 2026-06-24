@@ -10,7 +10,7 @@
     "test:emulators": "bash scripts/test-emulators.sh",
     "gen:llms": "bun run scripts/gen-llms.ts",
     "build:site": "bun run scripts/build-site.ts",
-    "typecheck": "bunx tsc --noEmit"
+    "typecheck": "bunx tsc --noEmit && bunx tsc -p tsconfig.standard.json"
   },
   "devDependencies": {
     "@types/bun": "latest",
