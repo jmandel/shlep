@@ -1,0 +1,49 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Fast path: manager + server + the ObjectStore contract against the in-memory
+  # store. No Docker, no SDKs needed beyond install.
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun test
+
+  # Certify the cloud adapters against real wire behavior via emulators:
+  # MinIO (S3 API), Azurite (Azure Blob), fake-gcs-server (GCS native API).
+  emulators:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Start emulators
+        run: |
+          docker run -d --name shlep-azurite -p 10000:10000 mcr.microsoft.com/azure-storage/azurite \
+            azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --skipApiVersionCheck
+          docker run -d --name shlep-minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio server /data
+          docker run -d --name shlep-fakegcs -p 4443:4443 fsouza/fake-gcs-server \
+            -scheme http -port 4443 -external-url http://127.0.0.1:4443 -backend memory
+      - name: Wait for emulators
+        run: |
+          for url in \
+            http://127.0.0.1:9000/minio/health/live \
+            http://127.0.0.1:10000/devstoreaccount1 \
+            http://127.0.0.1:4443/storage/v1/b?project=test; do
+            for _ in $(seq 1 60); do
+              [ "$(curl -s -o /dev/null -w '%{http_code}' "$url")" != "000" ] && break
+              sleep 1
+            done
+          done
+      - name: Conformance against emulators
+        run: SHLEP_TEST_S3=1 SHLEP_TEST_AZURE=1 SHLEP_TEST_GCS=1 bun test test/conformance.test.ts

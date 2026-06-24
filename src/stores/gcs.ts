@@ -23,6 +23,8 @@ export interface GcsStoreConfig {
   keyFilename?: string;
   /** Inline credentials, as an alternative to keyFilename. */
   credentials?: Record<string, unknown>;
+  /** Override the API endpoint (e.g. a fake-gcs-server emulator). */
+  apiEndpoint?: string;
 }
 
 export class GcsObjectStore implements ObjectStore {
@@ -34,6 +36,7 @@ export class GcsObjectStore implements ObjectStore {
       projectId: cfg.projectId,
       keyFilename: cfg.keyFilename,
       credentials: cfg.credentials as any,
+      apiEndpoint: cfg.apiEndpoint,
     });
     this.bucket = storage.bucket(cfg.bucket);
   }

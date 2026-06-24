@@ -46,9 +46,18 @@ which every major provider supports — AWS S3, R2, MinIO, GCS, and Azure all do
 Only Backblaze B2 and Wasabi lack it (a provider limitation): there you set
 `S3_CONDITIONAL_WRITE=0`, `maxUses` is refused, and everything else still works.
 
-The cloud adapters share one contract, pinned by `test/conformance.ts` (run in CI
-against memory; run it against a real bucket or an emulator — MinIO /
-fake-gcs-server / Azurite — to certify a provider). See `docs/api-design.md` §6.
+The cloud adapters share one contract (`test/conformance.ts`). CI runs it against
+the in-memory store and against MinIO, Azurite, and fake-gcs-server, so the S3,
+Azure, and GCS adapters are certified on real wire behavior — CAS included. See
+`docs/api-design.md` §6.
+
+## Tests
+
+```bash
+bun test                 # unit: manager + server + contract vs in-memory store
+bun run test:emulators   # certify the S3/Azure/GCS adapters against MinIO /
+                         # Azurite / fake-gcs-server (needs Docker)
+```
 
 ## The blind flow (client ↔ service)
 
@@ -93,6 +102,8 @@ src/
   server.ts         framework-agnostic fetch handler (data + control plane)
   client.ts         CLIENT side of the blind boundary (encrypt + compose link)
   index.ts          env wiring + Bun.serve
-test/               manager + http tests, and conformance.ts (the ObjectStore contract)
+test/               manager + http tests; conformance.ts (the ObjectStore contract);
+                    emulators.ts (adapters wired to MinIO / Azurite / fake-gcs)
+scripts/            build-site.ts, test-emulators.sh
 docs/               api-design.md (authoritative) + background-prd.md
 ```

@@ -148,9 +148,11 @@ failed (caller retries). Each adapter maps it to the backend's native preconditi
 | `GcsObjectStore` | Google Cloud Storage (native API) | ✓ (`ifGenerationMatch`) |
 | `AzureObjectStore` | Azure Blob Storage | ✓ (ETag `If-Match`) |
 
-All four implement one contract, pinned by the conformance suite in
-`test/conformance.ts` (run in CI against memory; run against a real bucket or an
-emulator — MinIO / fake-gcs-server / Azurite — to certify a cloud adapter).
+All four implement one contract, pinned by `test/conformance.ts`. CI runs it
+against the in-memory store **and** against MinIO (S3), Azurite (Azure), and
+fake-gcs-server (GCS), so the S3, Azure, and GCS adapters are exercised on real
+wire behavior — CAS included. `bun run test:emulators` reproduces it locally
+(Docker).
 
 ## 5. Lifecycle & state machine
 
@@ -216,9 +218,12 @@ everything else — revoke, expiry, passcode, pause, audit — still works. Ever
 backend also needs a CORS rule for the service origin; with the service in the read
 path the bucket itself can stay private.
 
-> Verification status: the in-memory adapter is fully tested in CI. The cloud
-> adapters are written to the conformance contract; certify each against a real
-> bucket or its emulator (MinIO / fake-gcs-server / Azurite) before production.
+> Verification: CI runs the conformance suite against the in-memory store and
+> against MinIO (S3), Azurite (Azure), and fake-gcs-server (GCS) — so every
+> shipped adapter, CAS included, is exercised on real wire. `bun run
+> test:emulators` reproduces it locally (Docker). Emulators can still lag real
+> provider behavior, so a smoke test against actual AWS/GCS/Azure is worth doing
+> before production.
 
 ## 7. Security & privacy
 

@@ -1,16 +1,12 @@
 import { MemoryObjectStore } from "../src/object-store";
 import { objectStoreContract } from "./conformance";
+import { azureStore, EMU, gcsStore, s3Store } from "./emulators";
 
-// The in-memory store runs the full contract in CI.
+// The in-memory store runs the full contract in CI, always.
 objectStoreContract("memory", () => new MemoryObjectStore());
 
-// To verify a cloud adapter, install its SDK and point the contract at a real
-// bucket or an emulator, e.g.:
-//
-//   import { S3ObjectStore } from "../src/stores/s3";
-//   objectStoreContract("minio", () => new S3ObjectStore({
-//     bucket: "shlep-test", endpoint: "http://127.0.0.1:9000",
-//     forcePathStyle: true, accessKeyId: "minioadmin", secretAccessKey: "minioadmin",
-//   }));
-//
-// Same shape for GcsObjectStore (fake-gcs-server) and AzureObjectStore (Azurite).
+// Cloud adapters run when their emulator is up (see scripts/test-emulators.sh):
+// MinIO (S3 API), Azurite (Azure Blob), fake-gcs-server (GCS native API).
+if (EMU.s3) objectStoreContract("s3 · minio", s3Store);
+if (EMU.azure) objectStoreContract("azure · azurite", azureStore);
+if (EMU.gcs) objectStoreContract("gcs · fake-gcs-server", gcsStore);
