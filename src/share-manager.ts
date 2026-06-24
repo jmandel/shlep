@@ -3,28 +3,22 @@
  * revocable, browser-fetchable SHLink files in a bucket" into method calls and
  * never exposes a raw bucket/key/presign operation.
  *
- * A share is a collection of files (0..N), each its own ciphertext object, all
- * under the link's one key. Management (add/replace/delete files, settings,
- * revoke) is uniform regardless of how a recipient reads:
+ * A share is a collection of files (0..N), each its own ciphertext object with a
+ * declared (decrypted) content type, all under the link's one key. Management
+ * (add/replace/delete files, settings, revoke) is uniform regardless of how a
+ * recipient reads:
  *   - manifest rail (POST /shl/:id) serves any file count;
- *   - direct "U" rail (GET /shl/:id?recipient=) serves iff exactly one file.
+ *   - direct "U" rail (GET /shl/:id?recipient=) serves iff exactly one file AND
+ *     no passcode (SHL: U SHALL NOT combine with P).
  *
  * Blind only: the client encrypts; the manager stores ciphertext +
  * sha256(manageToken) + opaque metadata, never the content key or plaintext.
- * Clients do NOT pick ids — they are server-minted random.
+ * Share ids are server-minted with 256 bits of entropy (SHL `url` requirement);
+ * the constructor refuses a baseUrl that would push the shlink `url` over 128 chars.
  *
- * Durability:
- *   CREATE     reserve the sidecar (create-if-absent) FIRST, then write ciphertext
- *              objects. Atomic id allocation; a crash leaves an unreferenced,
- *              unservable share (sweepable), never a clobber. (head+put on non-CAS.)
- *   ADD FILE   write the ciphertext FIRST, then add the file entry — a crash leaves
- *              an orphan object, never a dangling reference.
- *   DELETE FILE / REVOKE   remove the reference FIRST (stop serving), then delete
- *              the ciphertext object(s).
- *
- * Use-counting is race-safe via the store's conditionalPut (CAS) and refused on
- * non-CAS backends. Management writes fall back to last-writer-wins on non-CAS
- * backends (low-concurrency owner actions), so revoke/pause/etc. work everywhere.
+ * Use-counting and the passcode-failure budget are race-safe via the store's
+ * conditionalPut (CAS) and require it (refused on non-CAS backends). Other
+ * management writes fall back to last-writer-wins on non-CAS backends.
  */
 import { hmacHex, randomId, randomToken, sha256Hex, timingSafeEqualHex } from "./crypto";
 import type { ObjectStore } from "./object-store";
@@ -33,9 +27,11 @@ import {
   type Ciphertext,
   type CreateInput,
   type CreateResult,
+  DEFAULT_CONTENT_TYPE,
   type EffectiveStatus,
   Errors,
   type FileEntry,
+  type FileInput,
   type ResolveOptions,
   type ResolveResult,
   type ShareRecord,
@@ -52,12 +48,16 @@ export interface ManagerConfig {
   casMaxRetries?: number;
   /** Cap on inline manifest bytes regardless of the receiver's embeddedLengthMax. */
   maxEmbeddedBytes?: number;
+  /** Max ciphertext size per file (DoS guard). Default 5 MiB. */
+  maxFileBytes?: number;
+  /** Lifetime incorrect-passcode budget before the link is disabled (SHL). Default 100. */
+  maxPasscodeFailures?: number;
   /** HMAC secret for location-rail tickets. Defaults to a per-process random (single-node only). */
   ticketSecret?: string;
 }
 
 export interface ManifestFile {
-  contentType: "application/jose";
+  contentType: string;
   embedded?: string;
   location?: string;
 }
@@ -65,6 +65,7 @@ export interface Manifest {
   files: ManifestFile[];
 }
 
+const ID_BYTES = 32; // 256 bits of entropy for the share id (SHL `url` requirement)
 const teEncode = (s: string) => new TextEncoder().encode(s);
 const tdDecode = (b: Uint8Array) => new TextDecoder().decode(b);
 const nowSec = () => Math.floor(Date.now() / 1000);
@@ -77,6 +78,8 @@ export class ShareManager {
   private maxRecipients: number;
   private maxRetries: number;
   private maxEmbedded: number;
+  private maxFileBytes: number;
+  private maxPasscodeFailures: number;
   private ticketSecret: string;
 
   constructor(cfg: ManagerConfig) {
@@ -86,14 +89,21 @@ export class ShareManager {
     this.maxRecipients = cfg.maxRecipientsLogged ?? 50;
     this.maxRetries = cfg.casMaxRetries ?? 8;
     this.maxEmbedded = cfg.maxEmbeddedBytes ?? 100_000;
+    this.maxFileBytes = cfg.maxFileBytes ?? 5 * 1024 * 1024;
+    this.maxPasscodeFailures = cfg.maxPasscodeFailures ?? 100;
     this.ticketSecret = cfg.ticketSecret ?? randomToken();
+
+    // The shlink `url` (${baseUrl}/shl/${id}) SHALL NOT exceed 128 chars. A
+    // 256-bit id is 43 base64url chars, so baseUrl must be <= 80 chars.
+    const sampleLen = `${this.baseUrl}/shl/${"x".repeat(43)}`.length;
+    if (sampleLen > 128) {
+      throw new Error(`baseUrl too long: shlink url would be ${sampleLen} chars (>128). Use a shorter BASE_URL.`);
+    }
   }
 
-  /** This instance's public base URL (for docs / llms.txt). */
   get serviceBaseUrl(): string {
     return this.baseUrl;
   }
-  /** Whether the backend supports CAS, i.e. whether `maxUses` is available. */
   get useLimitsSupported(): boolean {
     return this.store.capabilities.conditionalWrite;
   }
@@ -110,6 +120,13 @@ export class ShareManager {
     while (taken.has(fid)) fid = randomId(6);
     return fid;
   }
+  private normFile(f: FileInput): { bytes: Uint8Array; contentType: string } {
+    const isWrapped = typeof f !== "string" && !(f instanceof Uint8Array);
+    const bytes = toBytes(isWrapped ? (f as any).ciphertext : (f as Ciphertext));
+    const contentType = isWrapped ? ((f as any).contentType ?? DEFAULT_CONTENT_TYPE) : DEFAULT_CONTENT_TYPE;
+    if (bytes.length > this.maxFileBytes) throw Errors.tooLarge(`file exceeds ${this.maxFileBytes} bytes`);
+    return { bytes, contentType };
+  }
 
   // ---------- create ----------
 
@@ -118,10 +135,14 @@ export class ShareManager {
     if (policy.maxUses != null && !this.store.capabilities.conditionalWrite) {
       throw Errors.unsupportedControl("maxUses", "this backend lacks conditional writes for race-safe counting");
     }
-    const cts: Uint8Array[] = [];
-    if (input.ciphertext != null) cts.push(toBytes(input.ciphertext));
-    for (const f of input.files ?? []) cts.push(toBytes(f));
-    if (cts.length === 0) throw Errors.badRequest("provide `ciphertext` or `files` (encrypt client-side; the service is blind)");
+    if (policy.passcode != null && !this.store.capabilities.conditionalWrite) {
+      throw Errors.unsupportedControl("passcode", "this backend lacks conditional writes for the lifetime attempt budget");
+    }
+
+    const norm: { bytes: Uint8Array; contentType: string }[] = [];
+    if (input.ciphertext != null) norm.push(this.normFile(input.contentType ? { ciphertext: input.ciphertext, contentType: input.contentType } : input.ciphertext));
+    for (const f of input.files ?? []) norm.push(this.normFile(f));
+    if (norm.length === 0) throw Errors.badRequest("provide `ciphertext` or `files` (encrypt client-side; the service is blind)");
 
     const token = randomToken();
     const manageTokenHash = await sha256Hex(token);
@@ -133,11 +154,11 @@ export class ShareManager {
     let files: FileEntry[] = [];
     for (let attempt = 0; ; attempt++) {
       if (attempt >= this.maxRetries) throw Errors.conflict();
-      id = randomId();
+      id = randomId(ID_BYTES);
       files = [];
-      for (const ct of cts) {
+      for (const n of norm) {
         const fileId = this.newFileId(files);
-        files.push({ fileId, cipherKey: this.fileKeyFor(id, fileId), len: ct.length });
+        files.push({ fileId, cipherKey: this.fileKeyFor(id, fileId), len: n.bytes.length, contentType: n.contentType });
       }
       const record: ShareRecord = {
         id,
@@ -149,6 +170,7 @@ export class ShareManager {
         useCount: 0,
         manageTokenHash,
         passcodeHash,
+        passcodeFailures: 0,
         recipients: [],
       };
       const metaKey = this.metaKeyFor(id);
@@ -164,7 +186,7 @@ export class ShareManager {
     // 2) write ciphertext objects.
     try {
       for (let i = 0; i < files.length; i++) {
-        await this.store.put(files[i]!.cipherKey, cts[i]!, { contentType: "application/jose", cacheControl: "no-store" });
+        await this.store.put(files[i]!.cipherKey, norm[i]!.bytes, { contentType: "application/jose", cacheControl: "no-store" });
       }
     } catch (e) {
       for (const f of files) await this.store.delete(f.cipherKey).catch(() => {});
@@ -183,8 +205,10 @@ export class ShareManager {
 
   // ---------- data plane (public) ----------
 
-  /** Direct-file rail: GET <url>?recipient=. Serves ONLY when the share has exactly one file. */
+  /** Direct-file rail: GET <url>?recipient=. Single-file, non-passcoded shares only (SHL: no U+P). */
   async resolveDirect(id: string, opts: ResolveOptions = {}): Promise<ResolveResult> {
+    const loaded = await this.loadRecord(id);
+    if (!loaded || loaded.record.passcodeHash != null) throw Errors.notServable(); // U incompatible with passcode
     const record = await this.checkAndCount(id, opts);
     if (record.files.length !== 1) throw Errors.notServable(); // U-link invalid unless exactly one file
     return this.fetchFile(record.files[0]!);
@@ -198,10 +222,10 @@ export class ShareManager {
     for (const f of record.files) {
       if (f.len <= cap) {
         const { jwe } = await this.fetchFile(f);
-        files.push({ contentType: "application/jose", embedded: jwe });
+        files.push({ contentType: f.contentType, embedded: jwe });
       } else {
         const ticket = await this.signTicket(id, f.fileId);
-        files.push({ contentType: "application/jose", location: `${this.baseUrl}/shl/${id}/f/${f.fileId}?t=${ticket}` });
+        files.push({ contentType: f.contentType, location: `${this.baseUrl}/shl/${id}/f/${f.fileId}?t=${ticket}` });
       }
     }
     return { files };
@@ -224,8 +248,9 @@ export class ShareManager {
       const { record, etag } = loaded;
 
       if (record.passcodeHash != null) {
+        if (record.passcodeFailures >= this.maxPasscodeFailures) throw Errors.notServable(); // disabled by brute-force budget
         const ok = opts.passcode != null && (await verifyPasscode(opts.passcode, record.passcodeHash));
-        if (!ok) throw Errors.passcodeRequired();
+        if (!ok) throw Errors.passcodeRequired(await this.recordPasscodeFailure(id));
       }
       if (!this.isServable(record)) throw Errors.notServable();
 
@@ -245,7 +270,17 @@ export class ShareManager {
     throw Errors.conflict();
   }
 
-  /** Servable = active, not expired, not exhausted. (Passcode checked separately.) */
+  /** CAS-increment the lifetime failure counter (passcode shares are CAS-only). Returns remaining attempts. */
+  private async recordPasscodeFailure(id: string): Promise<number> {
+    for (let attempt = 0; attempt < this.maxRetries; attempt++) {
+      const loaded = await this.loadRecord(id);
+      if (!loaded) return 0;
+      const next: ShareRecord = { ...loaded.record, passcodeFailures: loaded.record.passcodeFailures + 1 };
+      if (await this.writeMeta(id, next, loaded.etag)) return Math.max(0, this.maxPasscodeFailures - next.passcodeFailures);
+    }
+    return 0;
+  }
+
   private isServable(r: ShareRecord): boolean {
     if (r.status !== "active") return false;
     if (r.exp != null && nowSec() >= r.exp) return false;
@@ -291,10 +326,13 @@ export class ShareManager {
     return this.toView(await this.casUpdate(id, token, (r) => ({ ...r, maxUses })));
   }
 
-  /** Set, change, or clear (pass undefined) the passcode. */
+  /** Set, change, or clear (pass undefined) the passcode. Resets the failure budget. */
   async setPasscode(id: string, token: string, passcode: string | undefined): Promise<ShareView> {
+    if (passcode != null && !this.store.capabilities.conditionalWrite) {
+      throw Errors.unsupportedControl("passcode", "this backend lacks conditional writes for the lifetime attempt budget");
+    }
     const passcodeHash = passcode != null ? await hashPasscode(passcode) : undefined;
-    return this.toView(await this.casUpdate(id, token, (r) => ({ ...r, passcodeHash })));
+    return this.toView(await this.casUpdate(id, token, (r) => ({ ...r, passcodeHash, passcodeFailures: 0 })));
   }
 
   async accessLog(id: string, token: string) {
@@ -310,37 +348,34 @@ export class ShareManager {
 
   // ---------- file operations (capability-token authed) ----------
 
-  /** Add a file. Returns its server-minted fileId. */
-  async addFile(id: string, token: string, ciphertext: Ciphertext): Promise<{ fileId: string; view: ShareView }> {
+  async addFile(id: string, token: string, ciphertext: Ciphertext, contentType?: string): Promise<{ fileId: string; view: ShareView }> {
     const { record } = await this.requireOwner(id, token);
-    const bytes = toBytes(ciphertext);
+    const { bytes, contentType: ct } = this.normFile(contentType ? { ciphertext, contentType } : ciphertext);
     const fileId = this.newFileId(record.files);
     const cipherKey = this.fileKeyFor(id, fileId);
     await this.store.put(cipherKey, bytes, { contentType: "application/jose", cacheControl: "no-store" }); // object first
-    const updated = await this.casUpdate(id, token, (r) => ({ ...r, files: [...r.files, { fileId, cipherKey, len: bytes.length }] }));
+    const updated = await this.casUpdate(id, token, (r) => ({ ...r, files: [...r.files, { fileId, cipherKey, len: bytes.length, contentType: ct }] }));
     return { fileId, view: this.toView(updated) };
   }
 
-  /** Replace one file's content (same fileId, same key/link). */
-  async replaceFile(id: string, token: string, fileId: string, ciphertext: Ciphertext): Promise<ShareView> {
+  async replaceFile(id: string, token: string, fileId: string, ciphertext: Ciphertext, contentType?: string): Promise<ShareView> {
     const { record } = await this.requireOwner(id, token);
     const f = record.files.find((x) => x.fileId === fileId);
     if (!f) throw Errors.notFound();
-    const bytes = toBytes(ciphertext);
+    const { bytes } = this.normFile(contentType ? { ciphertext, contentType } : ciphertext);
     await this.store.put(f.cipherKey, bytes, { contentType: "application/jose", cacheControl: "no-store" });
     return this.toView(await this.casUpdate(id, token, (r) => ({
       ...r,
-      files: r.files.map((x) => (x.fileId === fileId ? { ...x, len: bytes.length } : x)),
+      files: r.files.map((x) => (x.fileId === fileId ? { ...x, len: bytes.length, contentType: contentType ?? x.contentType } : x)),
     })));
   }
 
-  /** Delete one file from the share. */
   async deleteFile(id: string, token: string, fileId: string): Promise<ShareView> {
     const { record } = await this.requireOwner(id, token);
     const f = record.files.find((x) => x.fileId === fileId);
     if (!f) throw Errors.notFound();
     const updated = await this.casUpdate(id, token, (r) => ({ ...r, files: r.files.filter((x) => x.fileId !== fileId) }));
-    await this.store.delete(f.cipherKey).catch(() => {}); // reclaim after removing the reference
+    await this.store.delete(f.cipherKey).catch(() => {});
     return this.toView(updated);
   }
 
@@ -352,7 +387,6 @@ export class ShareManager {
     return { record: JSON.parse(tdDecode(obj.bytes)) as ShareRecord, etag: obj.etag };
   }
 
-  /** Write the sidecar: CAS on capable backends, last-writer-wins otherwise. Returns false on CAS conflict. */
   private async writeMeta(id: string, record: ShareRecord, expectedEtag: string | null): Promise<boolean> {
     const body = teEncode(JSON.stringify(record));
     if (this.store.capabilities.conditionalWrite) {
@@ -372,14 +406,13 @@ export class ShareManager {
     return token != null && timingSafeEqualHex(await sha256Hex(token), record.manageTokenHash);
   }
 
-  /** CAS read-modify-write that re-verifies the capability token each attempt. */
   private async casUpdate(id: string, token: string, mutate: (r: ShareRecord) => ShareRecord): Promise<ShareRecord> {
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
       const loaded = await this.loadRecord(id);
       if (!loaded) throw Errors.notFound();
       if (!(await this.tokenMatches(token, loaded.record))) throw Errors.notFound();
       const next = mutate(loaded.record);
-      if (next === loaded.record) return loaded.record; // no-op
+      if (next === loaded.record) return loaded.record;
       if (await this.writeMeta(id, next, loaded.etag)) return next;
     }
     throw Errors.conflict();
@@ -395,8 +428,9 @@ export class ShareManager {
     return {
       id: r.id,
       status: this.effectiveStatus(r),
-      files: r.files.map((f) => ({ fileId: f.fileId, len: f.len })),
-      directServable: this.isServable(r) && r.files.length === 1,
+      files: r.files.map((f) => ({ fileId: f.fileId, len: f.len, contentType: f.contentType })),
+      // U rail needs exactly one file AND no passcode (SHL: no U+P).
+      directServable: this.isServable(r) && r.files.length === 1 && r.passcodeHash == null,
       exp: r.exp,
       maxUses: r.maxUses,
       audit: r.audit === true,

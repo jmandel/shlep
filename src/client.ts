@@ -29,7 +29,12 @@ export async function encryptBundle(plaintext: string, opts: { deflate?: boolean
 }
 
 export interface LinkOptions {
-  flag?: string; // default "U" (direct-file rail)
+  /**
+   * SHL flags. Default: omitted (manifest rail) — works for any share. Pass "U"
+   * (direct-file GET) ONLY for a single-file share with no passcode; SHL forbids
+   * combining "U" with "P" (passcode).
+   */
+  flag?: string;
   /** Human label. Travels in the link fragment only; the service never sees it. */
   label?: string;
   exp?: number;
@@ -37,7 +42,7 @@ export interface LinkOptions {
 
 /** Compose the bare `shlink:/…` from the service's fileUrl + the client's key. */
 export function composeShlink(fileUrl: string, keyB64: string, opts: LinkOptions = {}): string {
-  return encodeShlink({ url: fileUrl, key: keyB64, flag: opts.flag ?? "U", label: opts.label, exp: opts.exp });
+  return encodeShlink({ url: fileUrl, key: keyB64, flag: opts.flag, label: opts.label, exp: opts.exp });
 }
 
 /** Compose `${viewerPrefix}#shlink:/…` — the QR/copy target a recipient opens. */

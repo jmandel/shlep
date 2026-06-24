@@ -31,9 +31,13 @@ describe("http", () => {
     expect(got.status).toBe(200);
     expect(got.headers.get("content-type")).toBe("application/jose");
     expect(got.headers.get("access-control-allow-origin")).toBe("*");
+    expect(got.headers.get("cache-control")).toBe("no-store");
     expect(await openSealed(await got.text(), sealed.key)).toBe(BUNDLE);
 
-    // manifest rail
+    // recipient is required (SHL)
+    expect((await h(new Request(`http://t/shl/${id}`))).status).toBe(400);
+
+    // manifest rail -> no-store
     const man = await h(
       new Request(`http://t/shl/${id}`, {
         method: "POST",
@@ -41,13 +45,23 @@ describe("http", () => {
         body: JSON.stringify({ recipient: "r" }),
       }),
     );
+    expect(man.headers.get("cache-control")).toBe("no-store");
     const manifest = await man.json();
     expect(await openSealed(manifest.files[0].embedded, sealed.key)).toBe(BUNDLE);
 
     // revoke with manage token -> then 404
     const del = await h(new Request(`http://t/shares/${id}`, { method: "DELETE", headers: { authorization: `Bearer ${manageToken}` } }));
     expect(del.status).toBe(200);
-    expect((await h(new Request(`http://t/shl/${id}`))).status).toBe(404);
+    expect((await h(new Request(`http://t/shl/${id}?recipient=x`))).status).toBe(404);
+  });
+
+  test("CORS preflight covers control-plane methods + Authorization", async () => {
+    const h = handler();
+    const pre = await h(new Request("http://t/shares/x", { method: "OPTIONS" }));
+    expect(pre.status).toBe(204);
+    expect(pre.headers.get("access-control-allow-methods")).toContain("DELETE");
+    expect(pre.headers.get("access-control-allow-methods")).toContain("PUT");
+    expect(pre.headers.get("access-control-allow-headers")).toContain("authorization");
   });
 
   test("GET /llms.txt reflects this instance (open vs gated create, base URL)", async () => {

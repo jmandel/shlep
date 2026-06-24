@@ -42,8 +42,9 @@ describe("blind round-trip", () => {
     const { mgr } = mk();
     const sealed = await encryptBundle(BUNDLE);
     const res = await mgr.create({ ciphertext: sealed.jwe });
-    const shlink = composeShlink(res.fileUrl, sealed.keyB64, { label: "x" });
-    const payload = decodeShlink(`https://viewer.example/#${shlink}`);
+    // default omits flag (manifest rail, safe for any share); "U" is explicit opt-in
+    expect(decodeShlink(`x#${composeShlink(res.fileUrl, sealed.keyB64)}`).flag).toBeUndefined();
+    const payload = decodeShlink(`https://viewer.example/#${composeShlink(res.fileUrl, sealed.keyB64, { flag: "U", label: "x" })}`);
     expect(payload.url).toBe(res.fileUrl);
     expect(payload.key).toBe(sealed.keyB64);
     expect(payload.flag).toBe("U");
@@ -113,11 +114,37 @@ describe("controls", () => {
     expect(log.at(-1)?.recipient).toBe("Clinic A");
   });
 
-  test("passcode gates resolution", async () => {
+  test("passcode gates the manifest rail; the U rail refuses passcoded shares; failure budget", async () => {
+    const { mgr } = mk({ maxPasscodeFailures: 3 });
+    const sealed = await encryptBundle(BUNDLE);
+    const res = await mgr.create({ ciphertext: sealed.jwe, policy: { passcode: "1234" } });
+
+    // SHL: U SHALL NOT combine with P -> direct rail refuses (uniform 404), no budget burn
+    expect((await catchErr(mgr.resolveDirect(res.id, { recipient: "r" }))).httpStatus).toBe(404);
+
+    // wrong passcode on the manifest -> 401 + remainingAttempts, counted down to disable
+    const e1 = await catchErr(mgr.resolveManifest(res.id, { recipient: "r", passcode: "x" }));
+    expect(e1.httpStatus).toBe(401);
+    expect((e1.body as any).remainingAttempts).toBe(2);
+    await catchErr(mgr.resolveManifest(res.id, { recipient: "r", passcode: "x" })); // 1 left
+    await catchErr(mgr.resolveManifest(res.id, { recipient: "r", passcode: "x" })); // 0 left, now disabled
+    // disabled: even the correct passcode is refused (uniform 404)
+    expect((await catchErr(mgr.resolveManifest(res.id, { recipient: "r", passcode: "1234" }))).httpStatus).toBe(404);
+  });
+
+  test("correct passcode serves the manifest", async () => {
     const { mgr } = mk();
-    const res = await mgr.create({ ciphertext: (await encryptBundle(BUNDLE)).jwe, policy: { passcode: "1234" } });
-    expect((await catchErr(mgr.resolveDirect(res.id, {}))).httpStatus).toBe(401);
-    expect((await mgr.resolveDirect(res.id, { passcode: "1234" })).contentType).toBe("application/jose");
+    const sealed = await encryptBundle(BUNDLE);
+    const res = await mgr.create({ ciphertext: sealed.jwe, policy: { passcode: "1234" } });
+    const m = await mgr.resolveManifest(res.id, { recipient: "r", passcode: "1234" });
+    expect(await openSealed(m.files[0]!.embedded!, sealed.key)).toBe(BUNDLE);
+  });
+
+  test("passcode requires a CAS backend (honesty rule)", async () => {
+    const store = new MemoryObjectStore();
+    (store as any).capabilities = { conditionalWrite: false, presign: false, lifecycle: false };
+    const mgr = new ShareManager({ store, baseUrl: "https://shl.example.com" });
+    expect((await catchErr(mgr.create({ ciphertext: "x", policy: { passcode: "1234" } }))).code).toBe("unsupported_control");
   });
 });
 
@@ -146,7 +173,12 @@ describe("id allocation", () => {
     const a = await mgr.create({ ciphertext: (await encryptBundle(BUNDLE)).jwe });
     const b = await mgr.create({ ciphertext: (await encryptBundle(BUNDLE)).jwe });
     expect(a.id).not.toBe(b.id);
-    expect(a.id.length).toBeGreaterThanOrEqual(20); // 16 bytes base64url
+    expect(a.id.length).toBeGreaterThanOrEqual(43); // 32 bytes base64url = 256 bits (SHL url entropy)
+  });
+
+  test("constructor rejects a baseUrl that would exceed the 128-char url limit", () => {
+    const store = new MemoryObjectStore();
+    expect(() => new ShareManager({ store, baseUrl: "https://" + "x".repeat(90) + ".example.com" })).toThrow(/128/);
   });
 
   test("create works on a non-CAS backend (head+put reservation fallback)", async () => {
@@ -195,28 +227,37 @@ describe("file operations", () => {
     expect(await openSealed((await mgr.resolveDirect(res.id, {})).jwe, c.key)).toBe(JSON.stringify({ c: 3 }));
   });
 
-  test("create with multiple files", async () => {
+  test("create with multiple files; manifest carries per-file contentType", async () => {
     const { mgr } = mk();
     const a = await encryptBundle("A");
     const b = await encryptBundle("B");
-    const res = await mgr.create({ files: [a.jwe, b.jwe] });
+    const res = await mgr.create({ files: [a.jwe, { ciphertext: b.jwe, contentType: "application/smart-health-card" }] });
     expect(res.fileIds).toHaveLength(2);
-    expect((await mgr.resolveManifest(res.id, {})).files).toHaveLength(2);
+    const m = await mgr.resolveManifest(res.id, {});
+    expect(m.files).toHaveLength(2);
+    expect(m.files[0]!.contentType).toBe("application/fhir+json"); // default
+    expect(m.files[1]!.contentType).toBe("application/smart-health-card");
+  });
+
+  test("oversized ciphertext is rejected (413)", async () => {
+    const { mgr } = mk({ maxFileBytes: 8 });
+    expect((await catchErr(mgr.create({ ciphertext: "way-too-many-bytes" }))).httpStatus).toBe(413);
   });
 });
 
 describe("setPasscode", () => {
-  test("set, then clear, gates and ungates resolution", async () => {
+  test("set, then clear, gates and ungates resolution (manifest rail)", async () => {
     const { mgr } = mk();
     const res = await mgr.create({ ciphertext: (await encryptBundle(BUNDLE)).jwe });
-    expect((await mgr.resolveDirect(res.id, {})).contentType).toBe("application/jose"); // open
+    expect((await mgr.resolveDirect(res.id, { recipient: "r" })).contentType).toBe("application/jose"); // open, U works
 
     await mgr.setPasscode(res.id, res.manageToken, "9999");
-    expect((await catchErr(mgr.resolveDirect(res.id, {}))).httpStatus).toBe(401);
-    expect((await mgr.resolveDirect(res.id, { passcode: "9999" })).contentType).toBe("application/jose");
+    expect((await catchErr(mgr.resolveDirect(res.id, { recipient: "r" }))).httpStatus).toBe(404); // U+P refused
+    expect((await catchErr(mgr.resolveManifest(res.id, { recipient: "r" }))).httpStatus).toBe(401);
+    expect((await mgr.resolveManifest(res.id, { recipient: "r", passcode: "9999" })).files).toHaveLength(1);
 
     await mgr.setPasscode(res.id, res.manageToken, undefined); // clear
-    expect((await mgr.resolveDirect(res.id, {})).contentType).toBe("application/jose");
+    expect((await mgr.resolveDirect(res.id, { recipient: "r" })).contentType).toBe("application/jose"); // U works again
   });
 });
 

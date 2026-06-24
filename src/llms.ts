@@ -135,16 +135,24 @@ curl -sS "${b}/shl/<id>?recipient=Dr%20Smith"      # -> the JWE; decrypt locally
 curl -sS -X DELETE ${b}/shares/<id> -H "Authorization: Bearer <manageToken>"
 \`\`\`
 
-## Guarantees & rules
+## Guarantees & rules (SHL conformance)
 
 - **Blind host:** stores ciphertext + \`sha256(manageToken)\` + minimal enforcement metadata
-  (status, exp, maxUses/useCount, ciphertext length, and a salted-scrypt passcode hash if
-  set). Never the key, plaintext, or label.
+  (status, exp, maxUses/useCount, per-file length + contentType, salted-scrypt passcode hash
+  + failure count). Never the key, plaintext, or label.
+- **\`recipient\` is required** on every resolve (GET query or manifest POST body).
+- **File contentType** describes the *decrypted* payload — \`application/fhir+json\` (default),
+  \`application/smart-health-card\`, or \`application/smart-api-access\`. Pass it per file at create
+  (\`contentType\`) / add-file; it is echoed in the manifest, not \`application/jose\`.
+- **U is incompatible with passcode.** A passcoded share is served by the **manifest only**;
+  the GET (U) rail 404s for it. Don't mint a \`U\` link for a passcoded or multi-file share.
+- **Passcode brute-force budget:** wrong passcodes count down a lifetime limit; the 401 body is
+  \`{remainingAttempts}\`, and the link is disabled (uniform 404) once exhausted.
 - **One-time token:** \`manageToken\` is returned once at create and never again.
-- **Unique nonce:** every encryption uses a fresh random IV; use a fresh key per share.
-- **\`url\` budget:** keep the shlink \`url\` short (<=128 chars) — this server's \`/shl/:id\` URLs are.
-- **404 everything unservable:** revoked/expired/exhausted/paused links and wrong tokens all
-  return 404 — do not treat 404 as "never existed."
+- **Unique nonce + entropy:** every encryption uses a fresh random IV with a fresh key per
+  share; share ids carry 256 bits of entropy and the \`url\` stays ≤128 chars.
+- **404 everything unservable:** revoked/expired/exhausted/paused/disabled links and wrong
+  tokens all return 404 — do not treat 404 as "never existed."
 
 ## More
 

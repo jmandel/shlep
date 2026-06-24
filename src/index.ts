@@ -75,6 +75,10 @@ const handler = createFetchHandler(mgr, {
   createToken: env("CREATE_TOKEN"),
 });
 
+if (env("STORE", "memory") !== "memory" && !env("TICKET_SECRET")) {
+  console.warn("WARNING: TICKET_SECRET is unset — manifest 'location' tickets use a per-process random key and will 404 across instances. Set TICKET_SECRET for multi-node deployments.");
+}
+
 const port = Number(env("PORT", "8788"));
 Bun.serve({ port, fetch: handler });
 console.log(`shlep listening on :${port}  (base ${baseUrl}, store ${env("STORE", "memory")})`);

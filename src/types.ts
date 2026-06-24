@@ -50,11 +50,16 @@ export interface RecipientEntry {
   recipient: string;
 }
 
+/** The SHL-defined content types describing a file's DECRYPTED payload. */
+export const DEFAULT_CONTENT_TYPE = "application/fhir+json";
+
 /** One encrypted file within a share. The cipherKey is server-internal. */
 export interface FileEntry {
   fileId: string;
   cipherKey: string; // object-store key of this file's ciphertext
   len: number;
+  /** The DECRYPTED payload's content type (manifest `files[].contentType`), e.g. application/fhir+json. */
+  contentType: string;
 }
 
 /**
@@ -71,6 +76,8 @@ export interface ShareRecord {
   useCount: number;
   manageTokenHash: string; // sha256(capability token) — the only auth the host holds
   passcodeHash?: string;
+  /** Lifetime count of incorrect passcode attempts (SHL brute-force protection). */
+  passcodeFailures: number;
   recipients: RecipientEntry[];
 }
 
@@ -78,6 +85,7 @@ export interface ShareRecord {
 export interface FileView {
   fileId: string;
   len: number;
+  contentType: string;
 }
 
 /** Holder-facing view of a record (sensitive hashes stripped, effective status added). */
@@ -106,11 +114,16 @@ export interface ShlinkPayload {
 /** Pre-encrypted compact JWE(s). The client encrypts; the service stores opaque bytes. */
 export type Ciphertext = Uint8Array | string;
 
+/** A file to store: bare ciphertext (contentType defaults to application/fhir+json) or with a type. */
+export type FileInput = Ciphertext | { ciphertext: Ciphertext; contentType?: string };
+
 export interface CreateInput {
   /** A single file's ciphertext (the common case). */
   ciphertext?: Ciphertext;
+  /** The single file's decrypted content type (manifest contentType). Default application/fhir+json. */
+  contentType?: string;
   /** Or several files at once. At least one of `ciphertext` / `files` is required. */
-  files?: Ciphertext[];
+  files?: FileInput[];
   policy?: SharePolicy;
 }
 
@@ -142,7 +155,7 @@ export interface ResolveResult {
 }
 
 export class ShlError extends Error {
-  constructor(public code: string, message: string, public httpStatus: number) {
+  constructor(public code: string, message: string, public httpStatus: number, public body?: Record<string, unknown>) {
     super(message);
     this.name = "ShlError";
   }
@@ -155,7 +168,10 @@ export const Errors = {
   notServable: () => new ShlError("not_servable", "not found", 404),
   unsupportedControl: (c: string, why: string) =>
     new ShlError("unsupported_control", `control "${c}" unavailable: ${why}`, 409),
-  passcodeRequired: () => new ShlError("passcode_required", "passcode required or incorrect", 401),
+  /** SHL: 401 with a {remainingAttempts} body. */
+  passcodeRequired: (remainingAttempts?: number) =>
+    new ShlError("passcode_required", "passcode required or incorrect", 401, remainingAttempts != null ? { remainingAttempts } : undefined),
   conflict: () => new ShlError("conflict", "write conflict after retries", 409),
   badRequest: (m: string) => new ShlError("bad_request", m, 400),
+  tooLarge: (m: string) => new ShlError("too_large", m, 413),
 };

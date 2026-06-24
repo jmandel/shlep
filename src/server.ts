@@ -36,22 +36,27 @@ export interface ServerOptions {
   createToken?: string;
 }
 
+// Browser clients use both the data plane and the control plane (the README
+// shows cross-origin fetch DELETE /shares/:id with a bearer), so CORS allows the
+// control-plane methods/header too. The bearer is an explicit fetch header (not a
+// cookie credential), so `*` origin is fine.
 const CORS = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, POST, OPTIONS",
-  "access-control-allow-headers": "content-type",
+  "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "access-control-allow-headers": "content-type, authorization",
   "access-control-max-age": "86400",
 };
+const NOSTORE = { "cache-control": "no-store" };
 
 const json = (body: unknown, status = 200, extra: Record<string, string> = {}) =>
-  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...extra } });
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...CORS, ...extra } });
 
 const jose = (jwe: string) =>
-  new Response(jwe, { status: 200, headers: { "content-type": "application/jose", "cache-control": "no-store", ...CORS } });
+  new Response(jwe, { status: 200, headers: { "content-type": "application/jose", ...NOSTORE, ...CORS } });
 
-const errResponse = (e: unknown, cors = false) => {
-  const h = cors ? CORS : {};
-  if (e instanceof ShlError) return json({ error: e.code, message: e.message }, e.httpStatus, h);
+const errResponse = (e: unknown, dataPlane = false) => {
+  const h = dataPlane ? NOSTORE : {};
+  if (e instanceof ShlError) return json({ error: e.code, message: e.message, ...(e.body ?? {}) }, e.httpStatus, h);
   return json({ error: "internal", message: "internal error" }, 500, h);
 };
 
@@ -86,17 +91,22 @@ export function createFetchHandler(mgr: ShareManager, opts: ServerOptions = {}) 
       if (seg[0] === "shl" && seg.length === 2) {
         const id = seg[1];
         if (method === "GET") {
-          const r = await mgr.resolveDirect(id, { recipient: url.searchParams.get("recipient") ?? undefined });
+          const recipient = url.searchParams.get("recipient");
+          if (!recipient) return json({ error: "bad_request", message: "recipient query parameter is required" }, 400, NOSTORE);
+          const r = await mgr.resolveDirect(id, { recipient });
           return jose(r.jwe);
         }
         if (method === "POST") {
           const body = await readJson(req);
+          if (typeof body.recipient !== "string" || body.recipient.length === 0) {
+            return json({ error: "bad_request", message: "recipient is required" }, 400, NOSTORE);
+          }
           const manifest = await mgr.resolveManifest(id, {
             recipient: body.recipient,
             passcode: body.passcode,
             embeddedLengthMax: body.embeddedLengthMax,
           });
-          return json(manifest, 200, CORS);
+          return json(manifest, 200, NOSTORE);
         }
       }
       if (seg[0] === "shl" && seg.length === 4 && seg[2] === "f" && method === "GET") {
@@ -110,9 +120,9 @@ export function createFetchHandler(mgr: ShareManager, opts: ServerOptions = {}) 
           if (opts.createToken && bearer(req) !== opts.createToken) return json({ error: "unauthorized" }, 401);
           const body = await readJson(req);
           const hasOne = typeof body.ciphertext === "string";
-          const hasMany = Array.isArray(body.files) && body.files.length > 0;
-          if (!hasOne && !hasMany) return json({ error: "bad_request", message: "ciphertext or files[] (compact JWE strings) required" }, 400);
-          const res = await mgr.create({ ciphertext: body.ciphertext, files: body.files, policy: body.policy });
+          const hasMany = Array.isArray(body.files) && body.files.length > 0 && body.files.every((f: unknown) => typeof f === "string" || (f && typeof (f as any).ciphertext === "string"));
+          if (!hasOne && !hasMany) return json({ error: "bad_request", message: "ciphertext or files[] (compact JWE strings, optionally {ciphertext,contentType}) required" }, 400);
+          const res = await mgr.create({ ciphertext: body.ciphertext, contentType: body.contentType, files: body.files, policy: body.policy });
           return json(res, 201);
         }
         const id = seg[1];
@@ -122,14 +132,14 @@ export function createFetchHandler(mgr: ShareManager, opts: ServerOptions = {}) 
 
         // file operations
         if (seg.length === 3 && seg[2] === "files" && method === "POST") {
-          const ct = (await readJson(req)).ciphertext;
-          if (typeof ct !== "string") return json({ error: "bad_request", message: "ciphertext (compact JWE string) required" }, 400);
-          return json(await mgr.addFile(id, token, ct), 201);
+          const b = await readJson(req);
+          if (typeof b.ciphertext !== "string") return json({ error: "bad_request", message: "ciphertext (compact JWE string) required" }, 400);
+          return json(await mgr.addFile(id, token, b.ciphertext, b.contentType), 201);
         }
         if (seg.length === 4 && seg[2] === "files" && method === "PUT") {
-          const ct = (await readJson(req)).ciphertext;
-          if (typeof ct !== "string") return json({ error: "bad_request", message: "ciphertext (compact JWE string) required" }, 400);
-          return json(await mgr.replaceFile(id, token, seg[3], ct));
+          const b = await readJson(req);
+          if (typeof b.ciphertext !== "string") return json({ error: "bad_request", message: "ciphertext (compact JWE string) required" }, 400);
+          return json(await mgr.replaceFile(id, token, seg[3], b.ciphertext, b.contentType));
         }
         if (seg.length === 4 && seg[2] === "files" && method === "DELETE") {
           return json(await mgr.deleteFile(id, token, seg[3]));
@@ -148,8 +158,7 @@ export function createFetchHandler(mgr: ShareManager, opts: ServerOptions = {}) 
 
       return json({ error: "not_found" }, 404);
     } catch (e) {
-      const cors = seg[0] === "shl"; // only the data plane needs CORS on errors
-      return errResponse(e, cors);
+      return errResponse(e, seg[0] === "shl"); // data-plane errors are no-store
     }
   };
 }
