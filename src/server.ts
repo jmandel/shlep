@@ -16,7 +16,6 @@
  *     POST   /shares/:id/extend  {exp}
  *     POST   /shares/:id/limits  {maxUses}
  *     GET    /shares/:id/log
- *     GET    /admin/shares             (Authorization: Bearer <adminToken>) ops list
  *
  * `recipient` from the data plane is consumed here (logged) and NEVER forwarded
  * to storage. The control plane is auth'd per-share by the capability token.
@@ -27,8 +26,6 @@ import { ShlError } from "./types";
 export interface ServerOptions {
   /** If set, `POST /shares` requires this bearer token (otherwise create is open). */
   createToken?: string;
-  /** If set, enables `GET /admin/shares` for ops. */
-  adminToken?: string;
 }
 
 const CORS = {
@@ -106,12 +103,6 @@ export function createFetchHandler(mgr: ShareManager, opts: ServerOptions = {}) 
           if (seg[2] === "limits") return json(await mgr.setLimits(id, token, (await readJson(req)).maxUses));
         }
         if (seg.length === 3 && seg[2] === "log" && method === "GET") return json(await mgr.accessLog(id, token));
-      }
-
-      // ---- ops ----
-      if (seg[0] === "admin" && seg[1] === "shares" && method === "GET") {
-        if (!opts.adminToken || bearer(req) !== opts.adminToken) return json({ error: "not_found" }, 404);
-        return json(await mgr.list());
       }
 
       return json({ error: "not_found" }, 404);

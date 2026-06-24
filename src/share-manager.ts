@@ -271,20 +271,6 @@ export class ShareManager {
     await this.store.delete(this.metaKeyFor(id)).catch(() => {});
   }
 
-  /**
-   * Ops/maintenance only — scans the metadata prefix. NOT a blind-model feature
-   * (there are no accounts); the HTTP layer must gate this behind an admin token.
-   */
-  async list(): Promise<ShareView[]> {
-    const keys = await this.store.list(`${this.prefix}m/`);
-    const views: ShareView[] = [];
-    for (const k of keys) {
-      const obj = await this.store.get(k);
-      if (obj) views.push(this.toView(JSON.parse(tdDecode(obj.bytes)) as ShareRecord));
-    }
-    return views;
-  }
-
   // ---------- internals ----------
 
   private async loadRecord(id: string): Promise<{ record: ShareRecord; etag: string } | null> {

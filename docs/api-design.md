@@ -71,9 +71,11 @@ exhausted, paused) returns a **uniform 404** so existence never leaks.
 | `POST /shares/:id/extend` | `{exp}` | change expiry |
 | `POST /shares/:id/limits` | `{maxUses}` | change use-limit |
 | `GET /shares/:id/log` | — | recipient access log (entries exist only if `audit`) |
-| `GET /admin/shares` | `Bearer <adminToken>` | ops list (off unless configured) |
 
-`policy` = `{ exp?, maxUses?, label?, passcode?, audit? }`.
+`policy` = `{ exp?, maxUses?, label?, passcode?, audit? }`. There is deliberately
+**no list-all / admin endpoint**: the service is account-less and never enumerates
+shares. An operator who needs to inspect or sweep the bucket uses the cloud's own
+tooling out-of-band — the service exposes no privileged enumeration.
 
 `ciphertext` travels as a compact-JWE **string** (ASCII; JSON-safe). Wrong or
 missing manage token on any `/shares/:id*` route → **404** (never 401/403), so an
@@ -106,7 +108,6 @@ class ShareManager {
   setLimits(id, token, maxUses?): Promise<ShareView>;
   accessLog(id, token): Promise<RecipientEntry[]>;
   delete(id, token): Promise<void>;
-  list(): Promise<ShareView[]>;          // ops only; gate behind adminToken
 
   // data plane
   resolveDirect(id, opts): Promise<ResolveResult>;
@@ -264,8 +265,8 @@ The PRD left these open; here is the resolution implemented in `../src`:
    by the service, and never forwarded to storage. Recorded in the access log only
    when the share set `audit`.
 2. **Control-plane auth** — per-share capability token (bearer), `sha256` at rest,
-   404 on mismatch. No accounts/tenants required; optional `createToken` gates
-   creation, optional `adminToken` gates the ops list.
+   404 on mismatch. No accounts/tenants and no list-all endpoint; optional
+   `createToken` gates who may create.
 3. **Create/revoke atomicity & id conflicts** — clients never pick the id (128-bit
    server-minted). Create **reserves the id via sidecar create-if-absent first**,
    retrying a fresh id on the ~impossible collision (never surfaced, never

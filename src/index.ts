@@ -6,7 +6,6 @@
  *   BASE_URL=https://shl.example.com         (public base for the service)
  *   PORT=8788
  *   CREATE_TOKEN=...   (optional: require this bearer to POST /shares)
- *   ADMIN_TOKEN=...    (optional: enable GET /admin/shares)
  *   DEFAULT_MODE=mediated | direct
  *   TICKET_SECRET=...  (HMAC secret for location-rail tickets; set in prod/multi-node)
  *
@@ -74,7 +73,6 @@ const mgr = new ShareManager({
 
 const handler = createFetchHandler(mgr, {
   createToken: env("CREATE_TOKEN"),
-  adminToken: env("ADMIN_TOKEN"),
 });
 
 const port = Number(env("PORT", "8788"));
