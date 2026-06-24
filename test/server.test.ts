@@ -55,6 +55,26 @@ describe("http", () => {
     expect((await h(new Request(`http://t/shl/${id}?recipient=x`))).status).toBe(404);
   });
 
+  test("invalid policy / settings types -> 400 (not 500 or silently persisted)", async () => {
+    const h = handler();
+    const jwe = (await encryptBundle(BUNDLE)).jwe;
+    const post = (body: unknown) =>
+      h(new Request("http://t/shares", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
+
+    expect((await post({ ciphertext: jwe, policy: { passcode: 123 } })).status).toBe(400);
+    expect((await post({ ciphertext: jwe, policy: { maxUses: "abc" } })).status).toBe(400);
+    expect((await post({ ciphertext: jwe, policy: { exp: "abc" } })).status).toBe(400);
+    expect((await post({ ciphertext: jwe, policy: { audit: "yes" } })).status).toBe(400);
+
+    // settings endpoints reject bad types too
+    const { id, manageToken } = await (await post({ ciphertext: jwe })).json();
+    const auth = { authorization: `Bearer ${manageToken}`, "content-type": "application/json" };
+    const setLimits = await h(new Request(`http://t/shares/${id}/limits`, { method: "POST", headers: auth, body: JSON.stringify({ maxUses: "abc" }) }));
+    expect(setLimits.status).toBe(400);
+    const extend = await h(new Request(`http://t/shares/${id}/extend`, { method: "POST", headers: auth, body: JSON.stringify({ exp: "soon" }) }));
+    expect(extend.status).toBe(400);
+  });
+
   test("oversized request body -> 413 (capped before buffering)", async () => {
     const mgr = new ShareManager({ store: new MemoryObjectStore(), baseUrl: "http://t" });
     const h = createFetchHandler(mgr, { maxBodyBytes: 64 });

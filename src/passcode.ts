@@ -1,44 +1,41 @@
 /**
- * passcode.ts — best-practice passcode hashing for the optional access gate.
- * Salted scrypt (a memory-hard KDF) via node:crypto — no extra dependency.
+ * passcode.ts — passcode hashing for the optional access gate, using WebCrypto
+ * PBKDF2 (salted, iterated). WebCrypto-only — no node:crypto — so the manager and
+ * handler run on any Web-standard runtime (Bun, Node, Deno, Cloudflare Workers).
  *
- * Server-only: this is never imported by the browser-bundled client, so the
- * node:crypto dependency is fine.
- *
- * Stored format: `scrypt$<N>$<r>$<p>$<salt b64url>$<hash b64url>`. The per-share
- * salt defeats rainbow tables and cross-share correlation; the work factor slows
- * brute force. (A passcode is a host-enforced gate on retrieving the still-
- * encrypted ciphertext, so this hash is defense-in-depth against sidecar
- * exfiltration — see docs/api-design.md §7.)
+ * Stored format: `pbkdf2$<iterations>$<salt b64url>$<hash b64url>`. The per-share
+ * salt defeats rainbow tables / cross-share correlation; the iteration count slows
+ * offline brute force. A passcode is a host-enforced gate on retrieving the
+ * still-encrypted ciphertext, so this hash is defense-in-depth against sidecar
+ * exfiltration (see docs/api-design.md §7), and the small online attempt budget is
+ * the primary brute-force defense. PBKDF2 is the strongest KDF in WebCrypto
+ * (scrypt/argon2 aren't available there); we trade memory-hardness for portability.
  */
-import { randomBytes, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
+import { b64uFromBytes, bytesFromB64u, timingSafeEqualHex } from "./crypto";
 
-const PARAMS = { N: 16384, r: 8, p: 1 } as const; // ~tens of ms; OWASP-reasonable
+const subtle = globalThis.crypto.subtle;
+const enc = new TextEncoder();
+const ITERATIONS = 210_000; // OWASP PBKDF2-HMAC-SHA256 guidance
 const KEYLEN = 32;
+const bs = (u: Uint8Array): BufferSource => u as BufferSource;
 
-function scrypt(passcode: string, salt: Buffer, keylen: number, params: { N: number; r: number; p: number }): Promise<Buffer> {
-  return new Promise((resolve, reject) =>
-    scryptCb(passcode, salt, keylen, params, (err, dk) => (err ? reject(err) : resolve(dk as Buffer))),
-  );
+async function derive(passcode: string, salt: Uint8Array, iterations: number): Promise<Uint8Array> {
+  const key = await subtle.importKey("raw", bs(enc.encode(passcode)), "PBKDF2", false, ["deriveBits"]);
+  const bits = await subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: bs(salt), iterations }, key, KEYLEN * 8);
+  return new Uint8Array(bits);
 }
 
 export async function hashPasscode(passcode: string): Promise<string> {
-  const salt = randomBytes(16);
-  const dk = await scrypt(passcode, salt, KEYLEN, PARAMS);
-  return `scrypt$${PARAMS.N}$${PARAMS.r}$${PARAMS.p}$${salt.toString("base64url")}$${dk.toString("base64url")}`;
+  const salt = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  const dk = await derive(passcode, salt, ITERATIONS);
+  return `pbkdf2$${ITERATIONS}$${b64uFromBytes(salt)}$${b64uFromBytes(dk)}`;
 }
 
 export async function verifyPasscode(passcode: string, stored: string): Promise<boolean> {
   const parts = stored.split("$");
-  if (parts.length !== 6 || parts[0] !== "scrypt") return false;
-  const [, n, r, p, saltB64, hashB64] = parts;
-  const salt = Buffer.from(saltB64!, "base64url");
-  const expected = Buffer.from(hashB64!, "base64url");
-  let dk: Buffer;
-  try {
-    dk = await scrypt(passcode, salt, expected.length, { N: Number(n), r: Number(r), p: Number(p) });
-  } catch {
-    return false;
-  }
-  return dk.length === expected.length && timingSafeEqual(dk, expected);
+  if (parts.length !== 4 || parts[0] !== "pbkdf2") return false;
+  const iterations = Number(parts[1]);
+  if (!Number.isFinite(iterations) || iterations < 1) return false;
+  const dk = await derive(passcode, bytesFromB64u(parts[2]!), iterations);
+  return timingSafeEqualHex(b64uFromBytes(dk), parts[3]!);
 }

@@ -82,7 +82,9 @@ const res = await fetch("https://shl.example.com/shares", {
 }).then((r) => r.json());                                     // {id, fileUrl, manageToken}
 
 // 3. CLIENT composes the link with its own key — show as QR + copy/share.
-const link = composeViewerLink("https://periodicity.fhir.me/", res.fileUrl, sealed.keyB64, { label: "Cycle export" });
+//    flag:"U" = the single-GET direct-file rail (valid here: one file, no passcode).
+//    Omit `flag` for the manifest rail (any file count, required if passcoded/multi-file).
+const link = composeViewerLink("https://periodicity.fhir.me/", res.fileUrl, sealed.keyB64, { flag: "U", label: "Cycle export" });
 
 // 4. Later: revoke (needs the manage token only — it can't decrypt anything).
 await fetch(`https://shl.example.com/shares/${res.id}`, {
@@ -108,7 +110,7 @@ src/
   share-manager.ts  the high-level API: create/resolve/revoke/… + CAS counting
   server.ts         framework-agnostic fetch handler (data + control plane + /llms.txt)
   llms.ts           renders the instance-tailored /llms.txt integration guide
-  passcode.ts       salted-scrypt passcode hashing (server-only)
+  passcode.ts       salted-PBKDF2 passcode hashing (WebCrypto)
   client.ts         CLIENT side of the blind boundary (encrypt + compose link)
   index.ts          env wiring + Bun.serve
 test/               manager + http tests; conformance.ts (the ObjectStore contract);

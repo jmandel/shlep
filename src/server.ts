@@ -1,7 +1,10 @@
 /**
  * server.ts — a framework-agnostic `fetch` handler (Web Request -> Response) that
- * exposes the SHL data plane and the capability-token control plane. Works under
- * Bun.serve, Cloudflare Workers, Deno, or any Web-standard runtime.
+ * exposes the SHL data plane and the capability-token control plane. The handler,
+ * the ShareManager, crypto/passcode, and the in-memory store use only Web-standard
+ * APIs (WebCrypto, streams, fetch), so they run under Bun.serve, Deno, and
+ * Cloudflare Workers as well as Node. (The bundled S3/GCS/Azure adapters target
+ * Node/Bun; on Workers, use an R2 binding or a Workers-native store.)
  *
  *   DATA PLANE (public, CORS-enabled — browsers fetch these):
  *     GET  /shl/:id?recipient=        direct-file rail -> application/jose
@@ -67,6 +70,20 @@ const bearer = (req: Request): string | null => {
   return m?.[1] ?? null;
 };
 
+const isEpoch = (v: unknown) => typeof v === "number" && Number.isFinite(v);
+const isCount = (v: unknown) => typeof v === "number" && Number.isInteger(v) && v >= 1;
+
+/** Validate an untrusted policy object; returns an error message or null. */
+function badPolicy(policy: any): string | null {
+  if (policy == null) return null;
+  if (typeof policy !== "object") return "policy must be an object";
+  if (policy.exp !== undefined && !isEpoch(policy.exp)) return "policy.exp must be epoch seconds (number)";
+  if (policy.maxUses !== undefined && !isCount(policy.maxUses)) return "policy.maxUses must be a positive integer";
+  if (policy.passcode !== undefined && typeof policy.passcode !== "string") return "policy.passcode must be a string";
+  if (policy.audit !== undefined && typeof policy.audit !== "boolean") return "policy.audit must be a boolean";
+  return null;
+}
+
 export function createFetchHandler(mgr: ShareManager, opts: ServerOptions = {}) {
   const maxBody = opts.maxBodyBytes ?? 16 * 1024 * 1024;
   const readJson = (req: Request) => readJsonBounded(req, maxBody);
@@ -126,6 +143,8 @@ export function createFetchHandler(mgr: ShareManager, opts: ServerOptions = {}) 
           const hasOne = typeof body.ciphertext === "string";
           const hasMany = Array.isArray(body.files) && body.files.length > 0 && body.files.every((f: unknown) => typeof f === "string" || (f && typeof (f as any).ciphertext === "string"));
           if (!hasOne && !hasMany) return json({ error: "bad_request", message: "ciphertext or files[] (compact JWE strings, optionally {ciphertext,contentType}) required" }, 400);
+          const pErr = badPolicy(body.policy);
+          if (pErr) return json({ error: "bad_request", message: pErr }, 400);
           const res = await mgr.create({ ciphertext: body.ciphertext, contentType: body.contentType, files: body.files, policy: body.policy });
           return json(res, 201);
         }
@@ -153,9 +172,21 @@ export function createFetchHandler(mgr: ShareManager, opts: ServerOptions = {}) 
         if (seg.length === 3 && method === "POST") {
           if (seg[2] === "pause") return json(await mgr.pause(id, token));
           if (seg[2] === "resume") return json(await mgr.resume(id, token));
-          if (seg[2] === "extend") return json(await mgr.extend(id, token, (await readJson(req)).exp));
-          if (seg[2] === "limits") return json(await mgr.setLimits(id, token, (await readJson(req)).maxUses));
-          if (seg[2] === "passcode") return json(await mgr.setPasscode(id, token, (await readJson(req)).passcode));
+          if (seg[2] === "extend") {
+            const exp = (await readJson(req)).exp;
+            if (exp !== undefined && exp !== null && !isEpoch(exp)) return json({ error: "bad_request", message: "exp must be epoch seconds (number) or null" }, 400);
+            return json(await mgr.extend(id, token, exp ?? undefined));
+          }
+          if (seg[2] === "limits") {
+            const maxUses = (await readJson(req)).maxUses;
+            if (maxUses !== undefined && maxUses !== null && !isCount(maxUses)) return json({ error: "bad_request", message: "maxUses must be a positive integer or null" }, 400);
+            return json(await mgr.setLimits(id, token, maxUses ?? undefined));
+          }
+          if (seg[2] === "passcode") {
+            const pc = (await readJson(req)).passcode;
+            if (pc !== undefined && pc !== null && typeof pc !== "string") return json({ error: "bad_request", message: "passcode must be a string or null" }, 400);
+            return json(await mgr.setPasscode(id, token, pc ?? undefined));
+          }
         }
         if (seg.length === 3 && seg[2] === "log" && method === "GET") return json(await mgr.accessLog(id, token));
       }
@@ -187,8 +218,14 @@ async function readJsonBounded(req: Request, maxBytes: number): Promise<any> {
     chunks.push(value);
   }
   if (total === 0) return {};
+  const buf = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    buf.set(c, off);
+    off += c.length;
+  }
   try {
-    return JSON.parse(new TextDecoder().decode(Buffer.concat(chunks)));
+    return JSON.parse(new TextDecoder().decode(buf));
   } catch {
     return {};
   }

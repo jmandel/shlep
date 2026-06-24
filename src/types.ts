@@ -35,7 +35,7 @@ export interface SharePolicy {
   exp?: number;
   /** Max successful resolves before exhaustion (requires a CAS-capable backend). */
   maxUses?: number;
-  /** Optional passcode. Stored only as a salted-scrypt hash; never echoed. */
+  /** Optional passcode. Stored only as a salted-PBKDF2 hash; never echoed. */
   passcode?: string;
   /**
    * Record each recipient (and bump the access count) on resolve. Opt-in because

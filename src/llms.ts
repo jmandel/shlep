@@ -68,7 +68,7 @@ export function renderLlmsTxt(info: ServiceInfo): string {
 
 ## API
 
-All ids are server-minted (128-bit random). Labels are **not** sent to the server — they
+All ids are server-minted (256-bit random). Labels are **not** sent to the server — they
 live only in the link fragment.
 
 A share holds **one or more files**. Recipients read via the manifest (any count) or, when
@@ -82,7 +82,7 @@ is your assertion of one file; if the share ever has 0 or 2+ files, only that GE
 GET  ${b}/shl/:id?recipient=<name>     -> 200 application/jose   (single-file shares only)
 POST ${b}/shl/:id                       -> 200 application/json   (a manifest of all files)
        body: { "recipient": "<name>", "passcode"?: "...", "embeddedLengthMax"?: 16384 }
-       returns: { "files": [ { "contentType": "application/jose", "embedded" | "location": ... } ] }
+       returns: { "files": [ { "contentType": "application/fhir+json", "embedded" | "location": ... } ] }
 GET  ${b}/shl/:id/f/:fileId?t=<ticket>  -> 200 application/jose   (manifest "location" target)
 \`\`\`
 
@@ -138,7 +138,7 @@ curl -sS -X DELETE ${b}/shares/<id> -H "Authorization: Bearer <manageToken>"
 ## Guarantees & rules (SHL conformance)
 
 - **Blind host:** stores ciphertext + \`sha256(manageToken)\` + minimal enforcement metadata
-  (status, exp, maxUses/useCount, per-file length + contentType, salted-scrypt passcode hash
+  (status, exp, maxUses/useCount, per-file length + contentType, salted-PBKDF2 passcode hash
   + failure count). Never the key, plaintext, or label.
 - **\`recipient\` is required** on every resolve (GET query or manifest POST body).
 - **File contentType** describes the *decrypted* payload — \`application/fhir+json\` (default),
