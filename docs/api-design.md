@@ -283,14 +283,24 @@ path the bucket itself can stay private.
   the service refuses the ciphertext unless it matches — a second factor on top of
   link possession, fully compatible with content-blindness (the host sees the
   passcode it enforces but still only holds unreadable ciphertext). Stored with
-  **salted PBKDF2** (WebCrypto). SHL conformance: an **incorrect-attempt budget** (CAS-counted,
-  so it holds under parallel attacks; default 5, configurable, **reset on a correct
-  passcode**) — the 401 carries `{remainingAttempts}` and the link is **disabled**
-  once exhausted. (Reset-on-success makes it a consecutive-failure lockout —
-  intent-preserving vs. the spec's literal "lifetime count", since an attacker never
-  succeeds and so never resets.)
-  Requires a CAS backend (refused otherwise, like `maxUses`). The `U` (direct GET)
-  rail is **refused** for passcoded shares (SHL: `U` SHALL NOT combine with `P`).
+  **salted PBKDF2** (WebCrypto). The service enforces an incorrect-attempt budget
+  (CAS-counted, so it holds even under parallel attacks; default 5, configurable),
+  returns `{remainingAttempts}` in the 401, and **disables** the link once the
+  budget is spent. Requires a CAS backend (refused otherwise, like `maxUses`). The
+  `U` (direct GET) rail is **refused** for passcoded shares (SHL: `U` SHALL NOT
+  combine with `P`).
+
+  > **Product choice (documented deviation from SHL).** The SHL spec calls for a
+  > *total lifetime count* of incorrect passcodes. shlep instead uses a
+  > **consecutive-failure budget that resets on a correct passcode**. Rationale: a
+  > correct passcode proves legitimate access, so resetting the lockout is friendly
+  > to fat-fingering while preserving the spec's intent — an attacker brute-forcing
+  > never succeeds, so never triggers a reset, and still hits the wall. The risk
+  > accepted is that the lifetime cap is not absolute; we judge it acceptable
+  > because a single correct entry already implies the holder has access. **Disable
+  > is immediate and total**: once the budget is spent the link serves nothing on
+  > any rail — including manifest `location` tickets issued before the lockout (the
+  > ticket fetch re-checks servability), not merely until their short TTL elapses.
 - **Entropy:** share ids are **256-bit** random (SHL `url` requirement), and the
   constructor rejects a `baseUrl` that would push `${baseUrl}/shl/${id}` past 128
   chars. The manage token and passcode salts are independently random.

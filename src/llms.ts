@@ -147,7 +147,9 @@ curl -sS -X DELETE ${b}/shares/<id> -H "Authorization: Bearer <manageToken>"
 - **U is incompatible with passcode.** A passcoded share is served by the **manifest only**;
   the GET (U) rail 404s for it. Don't mint a \`U\` link for a passcoded or multi-file share.
 - **Passcode brute-force budget:** consecutive wrong passcodes count down (default 5, reset on a
-  correct one); the 401 body is \`{remainingAttempts}\`, and the link is disabled (404) once exhausted.
+  correct one — a documented product choice vs. the SHL spec's literal "lifetime count"); the 401
+  body is \`{remainingAttempts}\`. Once spent, the link is **disabled** and serves nothing on any
+  rail (including outstanding manifest tickets), returning a uniform 404.
 - **One-time token:** \`manageToken\` is returned once at create and never again.
 - **Unique nonce + entropy:** every encryption uses a fresh random IV with a fresh key per
   share; share ids carry 256 bits of entropy and the \`url\` stays ≤128 chars.
