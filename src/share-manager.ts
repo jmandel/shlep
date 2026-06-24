@@ -254,10 +254,11 @@ export class ShareManager {
       // Servability (revoked/expired/exhausted/paused) is checked FIRST, so an
       // inactive share returns a uniform 404 and never leaks via a 401 or burns
       // the passcode budget.
+      // isServable() now also covers a passcode-budget-disabled share, so an
+      // exhausted link serves nothing — including via an outstanding ticket.
       if (!this.isServable(record)) throw Errors.notServable();
       let resetFailures = false;
       if (record.passcodeHash != null) {
-        if (record.passcodeFailures >= this.maxPasscodeFailures) throw Errors.notServable(); // disabled by the budget
         const ok = opts.passcode != null && (await verifyPasscode(opts.passcode, record.passcodeHash));
         if (!ok) throw Errors.passcodeRequired(await this.recordPasscodeFailure(id));
         resetFailures = record.passcodeFailures > 0; // a correct passcode resets the consecutive-failure budget
@@ -295,6 +296,7 @@ export class ShareManager {
     if (r.status !== "active") return false;
     if (r.exp != null && nowSec() >= r.exp) return false;
     if (r.maxUses != null && r.useCount >= r.maxUses) return false;
+    if (r.passcodeHash != null && r.passcodeFailures >= this.maxPasscodeFailures) return false; // brute-force budget exhausted
     return true;
   }
 
@@ -432,6 +434,7 @@ export class ShareManager {
     if (r.status !== "active") return r.status;
     if (r.exp != null && nowSec() >= r.exp) return "expired";
     if (r.maxUses != null && r.useCount >= r.maxUses) return "exhausted";
+    if (r.passcodeHash != null && r.passcodeFailures >= this.maxPasscodeFailures) return "disabled";
     return "active";
   }
   private toView(r: ShareRecord): ShareView {

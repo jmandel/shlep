@@ -12,9 +12,23 @@ import type { ShlinkPayload } from "./types";
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
+const FLAG_ORDER = ["L", "P", "U"] as const; // SHL-defined flags, canonical order
+
+/** Validate + canonicalize SHL flags: subset of {L,P,U}, no dups, U and P exclusive, sorted. */
+function normalizeFlag(flag: string): string {
+  const set = new Set<string>();
+  for (const c of flag) {
+    if (!(FLAG_ORDER as readonly string[]).includes(c)) throw new Error(`invalid SHL flag "${c}" (allowed: L, P, U)`);
+    set.add(c);
+  }
+  if (set.has("U") && set.has("P")) throw new Error("SHL flags U and P are mutually exclusive");
+  return FLAG_ORDER.filter((c) => set.has(c)).join("");
+}
+
 export function encodeShlink(p: ShlinkPayload): string {
+  if (p.label != null && p.label.length > 80) throw new Error("SHL label exceeds 80 characters");
   const obj: Record<string, unknown> = { url: p.url, key: p.key };
-  if (p.flag) obj.flag = p.flag;
+  if (p.flag) obj.flag = normalizeFlag(p.flag);
   if (p.label) obj.label = p.label;
   if (p.exp != null) obj.exp = p.exp;
   obj.v = p.v ?? 1;

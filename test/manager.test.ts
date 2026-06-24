@@ -51,6 +51,19 @@ describe("blind round-trip", () => {
   });
 });
 
+describe("shlink validation", () => {
+  test("rejects non-conformant flags/labels and canonicalizes valid ones", () => {
+    const url = "https://shl.example.com/shl/abc";
+    const key = "k";
+    expect(() => composeShlink(url, key, { flag: "UP" })).toThrow(/mutually exclusive/); // U+P
+    expect(() => composeShlink(url, key, { flag: "X" })).toThrow(/invalid SHL flag/);
+    expect(() => composeShlink(url, key, { label: "x".repeat(81) })).toThrow(/80 characters/);
+    // valid flags are deduped + sorted to canonical L,P,U order
+    expect(decodeShlink(`#${composeShlink(url, key, { flag: "PL" })}`).flag).toBe("LP");
+    expect(decodeShlink(`#${composeShlink(url, key, { flag: "U" })}`).flag).toBe("U");
+  });
+});
+
 describe("capability token", () => {
   test("wrong manage token is indistinguishable from missing (404)", async () => {
     const { mgr } = mk();
@@ -277,6 +290,25 @@ describe("review fixes", () => {
     const e = await catchErr(mgr.resolveManifest(res.id, { recipient: "r", passcode: "wrong" }));
     expect(e.httpStatus).toBe(404); // servability checked before passcode
     expect((e.body as any)?.remainingAttempts).toBeUndefined(); // no leak
+  });
+
+  test("a budget-disabled passcoded link serves nothing — including outstanding tickets", async () => {
+    const { mgr } = mk({ maxPasscodeFailures: 2, maxEmbeddedBytes: 5 }); // force a ticketed location
+    const sealed = await encryptBundle(BUNDLE);
+    const res = await mgr.create({ ciphertext: sealed.jwe, policy: { passcode: "1234" } });
+
+    // a legit recipient (correct passcode) gets a location ticket
+    const manifest = await mgr.resolveManifest(res.id, { recipient: "r", passcode: "1234" });
+    const t = new URL(manifest.files[0]!.location!).searchParams.get("t")!;
+    expect((await mgr.resolveFileTicket(res.id, res.fileIds[0]!, t)).contentType).toBe("application/jose");
+
+    // attacker exhausts the budget -> link disabled
+    await catchErr(mgr.resolveManifest(res.id, { recipient: "a", passcode: "x" }));
+    await catchErr(mgr.resolveManifest(res.id, { recipient: "a", passcode: "x" }));
+    expect((await mgr.get(res.id, res.manageToken)).status).toBe("disabled");
+
+    // the previously-issued ticket no longer serves
+    expect((await catchErr(mgr.resolveFileTicket(res.id, res.fileIds[0]!, t))).httpStatus).toBe(404);
   });
 
   test("invalid contentType is rejected (400)", async () => {

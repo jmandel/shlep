@@ -28,7 +28,7 @@
 export type ShareStatus = "active" | "paused" | "revoked";
 
 /** Status as reported to the holder of the capability token (adds derived terminals). */
-export type EffectiveStatus = ShareStatus | "expired" | "exhausted";
+export type EffectiveStatus = ShareStatus | "expired" | "exhausted" | "disabled";
 
 export interface SharePolicy {
   /** Expiry, epoch seconds. Enforced on every resolve. */

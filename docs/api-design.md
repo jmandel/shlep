@@ -189,8 +189,11 @@ wire behavior — CAS included. `bun run test:emulators` reproduces it locally
 ## 5. Lifecycle & state machine
 
 Persisted `status ∈ {active, paused, revoked}`; **effective** status adds derived
-terminals `expired` (now ≥ exp) and `exhausted` (useCount ≥ maxUses), computed at
-read time — never written, so a clock change or limit edit can't strand state.
+terminals `expired` (now ≥ exp), `exhausted` (useCount ≥ maxUses), and `disabled`
+(passcode-failure budget spent), computed at read time — never written, so a clock
+change or limit edit can't strand state. A `disabled` link serves **nothing**,
+including any outstanding manifest `location` tickets (the ticket fetch re-checks
+servability).
 
 | from | event | to |
 |---|---|---|
