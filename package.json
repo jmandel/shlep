@@ -8,6 +8,7 @@
     "start": "bun run src/index.ts",
     "test": "bun test",
     "test:emulators": "bash scripts/test-emulators.sh",
+    "gen:llms": "bun run scripts/gen-llms.ts",
     "build:site": "bun run scripts/build-site.ts",
     "typecheck": "bunx tsc --noEmit"
   },

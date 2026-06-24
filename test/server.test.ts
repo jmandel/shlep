@@ -50,6 +50,25 @@ describe("http", () => {
     expect((await h(new Request(`http://t/shl/${id}`))).status).toBe(404);
   });
 
+  test("GET /llms.txt reflects this instance (open vs gated create, base URL)", async () => {
+    const open = createFetchHandler(new ShareManager({ store: new MemoryObjectStore(), baseUrl: "https://open.example" }));
+    const r1 = await open(new Request("https://open.example/llms.txt"));
+    expect(r1.status).toBe(200);
+    expect(r1.headers.get("content-type")).toContain("text/plain");
+    const t1 = await r1.text();
+    expect(t1).toContain("https://open.example/shl/:id");
+    expect(t1).toContain("**open**");
+    expect(t1).toContain("https://github.com/jmandel/shlep");
+    expect(t1).toContain("2³² messages per key"); // the nonce guidance
+
+    const gated = createFetchHandler(new ShareManager({ store: new MemoryObjectStore(), baseUrl: "https://g.example" }), {
+      createToken: "secret",
+    });
+    const t2 = await (await gated(new Request("https://g.example/llms.txt"))).text();
+    expect(t2).toContain("gated");
+    expect(t2).toContain("CREATE_TOKEN");
+  });
+
   test("wrong manage token -> 404 (existence hidden)", async () => {
     const h = handler();
     const created = await h(

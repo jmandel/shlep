@@ -17,9 +17,13 @@
  *     POST   /shares/:id/limits  {maxUses}
  *     GET    /shares/:id/log
  *
+ *   SELF-DOC (public): GET / and GET /llms.txt — an integration guide tailored to
+ *   this instance's config (open vs. token-gated create, CAS-capable backend).
+ *
  * `recipient` from the data plane is consumed here (logged) and NEVER forwarded
  * to storage. The control plane is auth'd per-share by the capability token.
  */
+import { renderLlmsTxt } from "./llms";
 import type { ShareManager } from "./share-manager";
 import { ShlError } from "./types";
 
@@ -59,6 +63,19 @@ export function createFetchHandler(mgr: ShareManager, opts: ServerOptions = {}) 
     const method = req.method.toUpperCase();
 
     if (method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+
+    // ---- self-documentation (public) ----
+    if (method === "GET" && (seg.length === 0 || (seg.length === 1 && seg[0] === "llms.txt"))) {
+      const info = {
+        baseUrl: mgr.serviceBaseUrl,
+        createRequiresToken: !!opts.createToken,
+        useLimitsSupported: mgr.useLimitsSupported,
+      };
+      const body = seg.length === 0
+        ? `shlep — SMART Health Link service\n\nIntegration guide for agents and clients: ${mgr.serviceBaseUrl}/llms.txt\nSource: https://github.com/jmandel/shlep\n`
+        : renderLlmsTxt(info);
+      return new Response(body, { headers: { "content-type": "text/plain; charset=utf-8", ...CORS } });
+    }
 
     try {
       // ---- data plane ----

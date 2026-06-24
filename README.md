@@ -59,6 +59,13 @@ bun run test:emulators   # certify the S3/Azure/GCS adapters against MinIO /
                          # Azurite / fake-gcs-server (needs Docker)
 ```
 
+## Self-documentation
+
+A running instance serves an agent-readable integration guide at **`GET /llms.txt`**
+(and a pointer at `GET /`), tailored to that instance — its base URL, whether create
+is open or token-gated, and whether the backend supports `maxUses`. Emit it as a
+static file with `bun run scripts/gen-llms.ts > llms.txt`.
+
 ## The blind flow (client ↔ service)
 
 ```ts
@@ -99,7 +106,9 @@ src/
   stores/gcs.ts     native Google Cloud Storage adapter
   stores/azure.ts   native Azure Blob adapter
   share-manager.ts  the high-level API: create/resolve/revoke/… + CAS counting
-  server.ts         framework-agnostic fetch handler (data + control plane)
+  server.ts         framework-agnostic fetch handler (data + control plane + /llms.txt)
+  llms.ts           renders the instance-tailored /llms.txt integration guide
+  passcode.ts       salted-scrypt passcode hashing (server-only)
   client.ts         CLIENT side of the blind boundary (encrypt + compose link)
   index.ts          env wiring + Bun.serve
 test/               manager + http tests; conformance.ts (the ObjectStore contract);

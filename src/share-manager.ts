@@ -86,6 +86,15 @@ export class ShareManager {
     this.ticketSecret = cfg.ticketSecret ?? randomToken();
   }
 
+  /** This instance's public base URL (for docs / llms.txt). */
+  get serviceBaseUrl(): string {
+    return this.baseUrl;
+  }
+  /** Whether the backend supports CAS, i.e. whether `maxUses` is available. */
+  get useLimitsSupported(): boolean {
+    return this.store.capabilities.conditionalWrite;
+  }
+
   private cipherKeyFor(id: string) {
     return `${this.prefix}c/${id}.jwe`;
   }
