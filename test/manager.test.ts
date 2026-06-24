@@ -66,7 +66,7 @@ describe("capability token", () => {
     const e = await catchErr(mgr.resolveDirect(res.id, {}));
     expect(e.httpStatus).toBe(404);
     // ciphertext object gone
-    expect(await store.get(`shl/c/${res.id}.jwe`)).toBeNull();
+    expect(await store.get(`shl/c/${res.id}/${res.fileIds[0]}.jwe`)).toBeNull();
   });
 });
 
@@ -128,14 +128,15 @@ describe("manifest rail", () => {
     const res = await mgr.create({ ciphertext: sealed.jwe });
     const manifest = await mgr.resolveManifest(res.id, { recipient: "r", embeddedLengthMax: 10 });
     const f = manifest.files[0]!;
+    const fileId = res.fileIds[0]!;
     expect(f.embedded).toBeUndefined();
-    expect(f.location).toContain(`/shl/${res.id}/f/0?t=`);
+    expect(f.location).toContain(`/shl/${res.id}/f/${fileId}?t=`);
 
     const t = new URL(f.location!).searchParams.get("t")!;
-    const file = await mgr.resolveFileTicket(res.id, "0", t);
+    const file = await mgr.resolveFileTicket(res.id, fileId, t);
     expect(await openSealed(file.jwe, sealed.key)).toBe(BUNDLE);
 
-    expect((await catchErr(mgr.resolveFileTicket(res.id, "0", "bogus.sig"))).httpStatus).toBe(404);
+    expect((await catchErr(mgr.resolveFileTicket(res.id, fileId, "bogus.sig"))).httpStatus).toBe(404);
   });
 });
 
@@ -157,6 +158,65 @@ describe("id allocation", () => {
     expect(await openSealed((await mgr.resolveDirect(res.id, {})).jwe, sealed.key)).toBe(BUNDLE);
     // use-limits are refused on a non-CAS backend (honesty rule)
     expect((await catchErr(mgr.create({ ciphertext: "x", policy: { maxUses: 2 } }))).code).toBe("unsupported_control");
+    // but management (revoke/pause) still works via last-writer-wins
+    expect((await mgr.revoke(res.id, res.manageToken)).status).toBe("revoked");
+    expect((await catchErr(mgr.resolveDirect(res.id, {}))).httpStatus).toBe(404);
+  });
+});
+
+describe("file operations", () => {
+  test("add/replace/delete files; the U rail serves only with exactly one file", async () => {
+    const { mgr } = mk();
+    const a = await encryptBundle(JSON.stringify({ a: 1 }));
+    const b = await encryptBundle(JSON.stringify({ b: 2 }));
+    const res = await mgr.create({ ciphertext: a.jwe });
+
+    // one file -> direct rail works
+    expect(await openSealed((await mgr.resolveDirect(res.id, {})).jwe, a.key)).toBe(JSON.stringify({ a: 1 }));
+
+    // add a second file -> direct rail now invalid (404), manifest serves both
+    const { fileId: bId, view } = await mgr.addFile(res.id, res.manageToken, b.jwe);
+    expect(view.files).toHaveLength(2);
+    expect(view.directServable).toBe(false);
+    expect((await catchErr(mgr.resolveDirect(res.id, {}))).httpStatus).toBe(404);
+    const manifest = await mgr.resolveManifest(res.id, {});
+    expect(manifest.files).toHaveLength(2);
+    expect(await openSealed(manifest.files[1]!.embedded!, b.key)).toBe(JSON.stringify({ b: 2 }));
+
+    // delete the second file -> back to one, direct rail works again
+    const after = await mgr.deleteFile(res.id, res.manageToken, bId);
+    expect(after.files).toHaveLength(1);
+    expect(after.directServable).toBe(true);
+    expect((await mgr.resolveDirect(res.id, {})).contentType).toBe("application/jose");
+
+    // replace the remaining file's content (same link/key)
+    const c = await encryptBundle(JSON.stringify({ c: 3 }));
+    await mgr.replaceFile(res.id, res.manageToken, res.fileIds[0]!, c.jwe);
+    expect(await openSealed((await mgr.resolveDirect(res.id, {})).jwe, c.key)).toBe(JSON.stringify({ c: 3 }));
+  });
+
+  test("create with multiple files", async () => {
+    const { mgr } = mk();
+    const a = await encryptBundle("A");
+    const b = await encryptBundle("B");
+    const res = await mgr.create({ files: [a.jwe, b.jwe] });
+    expect(res.fileIds).toHaveLength(2);
+    expect((await mgr.resolveManifest(res.id, {})).files).toHaveLength(2);
+  });
+});
+
+describe("setPasscode", () => {
+  test("set, then clear, gates and ungates resolution", async () => {
+    const { mgr } = mk();
+    const res = await mgr.create({ ciphertext: (await encryptBundle(BUNDLE)).jwe });
+    expect((await mgr.resolveDirect(res.id, {})).contentType).toBe("application/jose"); // open
+
+    await mgr.setPasscode(res.id, res.manageToken, "9999");
+    expect((await catchErr(mgr.resolveDirect(res.id, {}))).httpStatus).toBe(401);
+    expect((await mgr.resolveDirect(res.id, { passcode: "9999" })).contentType).toBe("application/jose");
+
+    await mgr.setPasscode(res.id, res.manageToken, undefined); // clear
+    expect((await mgr.resolveDirect(res.id, {})).contentType).toBe("application/jose");
   });
 });
 

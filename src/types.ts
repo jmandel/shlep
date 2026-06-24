@@ -6,6 +6,13 @@
  * read is resolved through it, so revocation, expiry, passcode, pause, use-limits,
  * and an opt-in access log are all enforceable.
  *
+ * A share is a COLLECTION OF FILES (0..N), each an independently
+ * add/replace/delete-able ciphertext, all under the link's one key. Recipients
+ * read via the manifest rail (any file count) or, when the share has exactly one
+ * file, the direct-file "U" rail (a single GET). A U-flagged link is the client's
+ * assertion that the share has one file; if that stops being true, only that
+ * shortcut breaks (the manifest still works).
+ *
  * BLIND-HOST INVARIANT: the service stores only ciphertext + sha256(manageToken)
  * + opaque metadata. It never sees the content encryption key or the plaintext.
  * The key is generated client-side and lives only in the link fragment; the
@@ -28,7 +35,7 @@ export interface SharePolicy {
   exp?: number;
   /** Max successful resolves before exhaustion (requires a CAS-capable backend). */
   maxUses?: number;
-  /** Optional passcode. Stored only as a hash; never echoed. */
+  /** Optional passcode. Stored only as a salted-scrypt hash; never echoed. */
   passcode?: string;
   /**
    * Record each recipient (and bump the access count) on resolve. Opt-in because
@@ -43,6 +50,13 @@ export interface RecipientEntry {
   recipient: string;
 }
 
+/** One encrypted file within a share. The cipherKey is server-internal. */
+export interface FileEntry {
+  fileId: string;
+  cipherKey: string; // object-store key of this file's ciphertext
+  len: number;
+}
+
 /**
  * The sidecar metadata object persisted in the bucket alongside the ciphertext.
  * INVARIANT: never contains the AES key or any plaintext.
@@ -50,9 +64,7 @@ export interface RecipientEntry {
 export interface ShareRecord {
   id: string;
   status: ShareStatus;
-  flag: string; // SHL flags; "U" = the direct-file retrieval rail (GET)
-  cipherKey: string; // object-store key of the ciphertext
-  cipherLen: number;
+  files: FileEntry[];
   exp?: number;
   maxUses?: number;
   audit?: boolean;
@@ -62,16 +74,23 @@ export interface ShareRecord {
   recipients: RecipientEntry[];
 }
 
+/** Holder-facing file descriptor (no internal storage key). */
+export interface FileView {
+  fileId: string;
+  len: number;
+}
+
 /** Holder-facing view of a record (sensitive hashes stripped, effective status added). */
 export interface ShareView {
   id: string;
   status: EffectiveStatus;
-  flag: string;
+  files: FileView[];
+  /** Whether the direct-file (U) rail will currently serve — i.e. exactly one file. */
+  directServable: boolean;
   exp?: number;
   maxUses?: number;
   audit: boolean;
   useCount: number;
-  cipherLen: number;
   recipientCount: number;
 }
 
@@ -84,13 +103,14 @@ export interface ShlinkPayload {
   v?: number;
 }
 
+/** Pre-encrypted compact JWE(s). The client encrypts; the service stores opaque bytes. */
+export type Ciphertext = Uint8Array | string;
+
 export interface CreateInput {
-  /**
-   * The pre-encrypted compact JWE. This is the ONLY way content enters the
-   * service — the client encrypts; the service stores opaque bytes and never
-   * sees the key or plaintext. Bytes or a JWE string.
-   */
-  ciphertext: Uint8Array | string;
+  /** A single file's ciphertext (the common case). */
+  ciphertext?: Ciphertext;
+  /** Or several files at once. At least one of `ciphertext` / `files` is required. */
+  files?: Ciphertext[];
   policy?: SharePolicy;
 }
 
@@ -99,6 +119,8 @@ export interface CreateResult {
   status: ShareStatus;
   /** The shlink `url`: `${baseUrl}/shl/${id}`. */
   fileUrl: string;
+  /** The file id(s) created — use them to replace/delete individual files later. */
+  fileIds: string[];
   /**
    * Returned ONCE, here and nowhere else. The capability to manage/revoke this
    * share. The client stores it; the service keeps only sha256(it). It can never

@@ -9,12 +9,16 @@
  *     GET  /shl/:id/f/:fileId?t=       ticketed file   -> application/jose
  *
  *   CONTROL PLANE (Authorization: Bearer <manageToken>; wrong token -> 404):
- *     POST   /shares                   create -> {id,status,fileUrl,manageToken}
- *     GET    /shares/:id               state
- *     DELETE /shares/:id               revoke
+ *     POST   /shares                      create -> {id,status,fileUrl,fileIds,manageToken}
+ *     GET    /shares/:id                  state (ShareView, incl. files[])
+ *     DELETE /shares/:id                  revoke
+ *     POST   /shares/:id/files {ciphertext}        add a file -> {fileId,view}
+ *     PUT    /shares/:id/files/:fileId {ciphertext} replace a file
+ *     DELETE /shares/:id/files/:fileId             delete a file
  *     POST   /shares/:id/pause|resume
- *     POST   /shares/:id/extend  {exp}
- *     POST   /shares/:id/limits  {maxUses}
+ *     POST   /shares/:id/extend   {exp}
+ *     POST   /shares/:id/limits   {maxUses}
+ *     POST   /shares/:id/passcode {passcode?}      set / change / clear
  *     GET    /shares/:id/log
  *
  *   SELF-DOC (public): GET / and GET /llms.txt — an integration guide tailored to
@@ -105,19 +109,39 @@ export function createFetchHandler(mgr: ShareManager, opts: ServerOptions = {}) 
         if (seg.length === 1 && method === "POST") {
           if (opts.createToken && bearer(req) !== opts.createToken) return json({ error: "unauthorized" }, 401);
           const body = await readJson(req);
-          if (typeof body.ciphertext !== "string") return json({ error: "bad_request", message: "ciphertext (compact JWE string) required" }, 400);
-          const res = await mgr.create({ ciphertext: body.ciphertext, policy: body.policy });
+          const hasOne = typeof body.ciphertext === "string";
+          const hasMany = Array.isArray(body.files) && body.files.length > 0;
+          if (!hasOne && !hasMany) return json({ error: "bad_request", message: "ciphertext or files[] (compact JWE strings) required" }, 400);
+          const res = await mgr.create({ ciphertext: body.ciphertext, files: body.files, policy: body.policy });
           return json(res, 201);
         }
         const id = seg[1];
         const token = bearer(req) ?? "";
         if (seg.length === 2 && method === "GET") return json(await mgr.get(id, token));
         if (seg.length === 2 && method === "DELETE") return json(await mgr.revoke(id, token));
+
+        // file operations
+        if (seg.length === 3 && seg[2] === "files" && method === "POST") {
+          const ct = (await readJson(req)).ciphertext;
+          if (typeof ct !== "string") return json({ error: "bad_request", message: "ciphertext (compact JWE string) required" }, 400);
+          return json(await mgr.addFile(id, token, ct), 201);
+        }
+        if (seg.length === 4 && seg[2] === "files" && method === "PUT") {
+          const ct = (await readJson(req)).ciphertext;
+          if (typeof ct !== "string") return json({ error: "bad_request", message: "ciphertext (compact JWE string) required" }, 400);
+          return json(await mgr.replaceFile(id, token, seg[3], ct));
+        }
+        if (seg.length === 4 && seg[2] === "files" && method === "DELETE") {
+          return json(await mgr.deleteFile(id, token, seg[3]));
+        }
+
+        // settings
         if (seg.length === 3 && method === "POST") {
           if (seg[2] === "pause") return json(await mgr.pause(id, token));
           if (seg[2] === "resume") return json(await mgr.resume(id, token));
           if (seg[2] === "extend") return json(await mgr.extend(id, token, (await readJson(req)).exp));
           if (seg[2] === "limits") return json(await mgr.setLimits(id, token, (await readJson(req)).maxUses));
+          if (seg[2] === "passcode") return json(await mgr.setPasscode(id, token, (await readJson(req)).passcode));
         }
         if (seg.length === 3 && seg[2] === "log" && method === "GET") return json(await mgr.accessLog(id, token));
       }

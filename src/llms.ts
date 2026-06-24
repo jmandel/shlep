@@ -71,11 +71,16 @@ export function renderLlmsTxt(info: ServiceInfo): string {
 All ids are server-minted (128-bit random). Labels are **not** sent to the server — they
 live only in the link fragment.
 
+A share holds **one or more files**. Recipients read via the manifest (any count) or, when
+the share has **exactly one file**, the single-GET shortcut (the SHL \`U\` flag). A \`U\` link
+is your assertion of one file; if the share ever has 0 or 2+ files, only that GET shortcut
+404s — the manifest still works.
+
 ### Data plane (public; CORS \`*\`)
 
 \`\`\`
-GET  ${b}/shl/:id?recipient=<name>     -> 200 application/jose   (the JWE bytes)
-POST ${b}/shl/:id                       -> 200 application/json   (a manifest)
+GET  ${b}/shl/:id?recipient=<name>     -> 200 application/jose   (single-file shares only)
+POST ${b}/shl/:id                       -> 200 application/json   (a manifest of all files)
        body: { "recipient": "<name>", "passcode"?: "...", "embeddedLengthMax"?: 16384 }
        returns: { "files": [ { "contentType": "application/jose", "embedded" | "location": ... } ] }
 GET  ${b}/shl/:id/f/:fileId?t=<ticket>  -> 200 application/jose   (manifest "location" target)
@@ -88,20 +93,24 @@ revoked, expired, exhausted, or paused — returns a **uniform 404** so existenc
 ### Control plane (\`Authorization: Bearer <manageToken>\`; wrong/missing token -> 404)
 
 \`\`\`
-POST   ${b}/shares                 create  -> { id, status, fileUrl, manageToken }
-GET    ${b}/shares/:id             current state (ShareView)
-DELETE ${b}/shares/:id             revoke (stops serving + deletes ciphertext)
-POST   ${b}/shares/:id/pause       pause
-POST   ${b}/shares/:id/resume      resume
-POST   ${b}/shares/:id/extend      body: { "exp": <epochSeconds> }
-POST   ${b}/shares/:id/limits      body: { "maxUses": <n> }
-GET    ${b}/shares/:id/log         recipient access log (entries exist only if audit)
+POST   ${b}/shares                       create  -> { id, status, fileUrl, fileIds, manageToken }
+GET    ${b}/shares/:id                   current state (ShareView, incl. files[])
+DELETE ${b}/shares/:id                   revoke (stops serving + deletes ciphertext)
+POST   ${b}/shares/:id/files             add a file     body: { "ciphertext": "<JWE>" } -> { fileId, view }
+PUT    ${b}/shares/:id/files/:fileId     replace a file body: { "ciphertext": "<JWE>" }
+DELETE ${b}/shares/:id/files/:fileId     delete a file
+POST   ${b}/shares/:id/pause             pause
+POST   ${b}/shares/:id/resume            resume
+POST   ${b}/shares/:id/extend            body: { "exp": <epochSeconds> }
+POST   ${b}/shares/:id/limits            body: { "maxUses": <n> }
+POST   ${b}/shares/:id/passcode          set/change/clear  body: { "passcode": "..." | null }
+GET    ${b}/shares/:id/log               recipient access log (entries exist only if audit)
 \`\`\`
 
-\`POST /shares\` body: \`{ "ciphertext": "<compact JWE string>", "policy"?: { ... } }\`.
-\`policy = { exp?: epochSeconds, maxUses?: number, passcode?: string, audit?: boolean }\`.
-There is **no list-all/admin endpoint** — the service is account-less and never enumerates
-shares.
+\`POST /shares\` body: \`{ "ciphertext": "<JWE>" }\` (one file) or \`{ "files": ["<JWE>", ...] }\`,
+plus optional \`"policy"\`. \`policy = { exp?: epochSeconds, maxUses?: number, passcode?: string,
+audit?: boolean }\`. Updates keep the same key/link (re-encrypt with a fresh IV). There is
+**no list-all/admin endpoint** — the service is account-less and never enumerates shares.
 
 ## Quickstart
 
