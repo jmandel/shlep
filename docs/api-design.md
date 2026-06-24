@@ -136,9 +136,21 @@ interface ObjectStore {
 ```
 
 `conditionalPut` is the compare-and-swap primitive: `expectedEtag===null` means
-create-if-absent (`If-None-Match: *`); a string means replace-if-unchanged
-(`If-Match`); `null` return = precondition failed (caller retries). Shipped
-adapters: `MemoryObjectStore` (dev/tests) and `S3ObjectStore` (any S3-compatible).
+create-if-absent; a string means replace-if-unchanged; `null` return = precondition
+failed (caller retries). Each adapter maps it to the backend's native precondition
+(S3/Azure ETag `If-Match`/`If-None-Match`; GCS `ifGenerationMatch`) and reports
+`capabilities.conditionalWrite` honestly. Shipped adapters:
+
+| adapter | backends | CAS (use-limits) |
+|---|---|---|
+| `MemoryObjectStore` | dev / tests | ✓ |
+| `S3ObjectStore` | AWS S3, Cloudflare R2, MinIO, Backblaze B2, Wasabi | ✓ on S3/R2/MinIO; B2/Wasabi set `conditionalWrite:false` |
+| `GcsObjectStore` | Google Cloud Storage (native API) | ✓ (`ifGenerationMatch`) |
+| `AzureObjectStore` | Azure Blob Storage | ✓ (ETag `If-Match`) |
+
+All four implement one contract, pinned by the conformance suite in
+`test/conformance.ts` (run in CI against memory; run against a real bucket or an
+emulator — MinIO / fake-gcs-server / Azurite — to certify a cloud adapter).
 
 ## 5. Lifecycle & state machine
 
@@ -187,21 +199,26 @@ same `conditionalPut` seam (noted, not required).
 
 ## 6. Backend capability matrix
 
-| Backend | CORS config | Conditional write (CAS) | Notes |
-|---|---|---|---|
-| AWS S3 | bucket CORS | ✓ (`If-None-Match` Aug 2024, `If-Match` Nov 2024) | reference target |
-| Cloudflare R2 | bucket CORS | ✓ (`If-Match`/`If-None-Match`) | S3 API |
-| MinIO | bucket CORS | ✓ | S3 API, `forcePathStyle` |
-| Backblaze B2 | bucket CORS | ✗ | set `conditionalWrite:false` → no use-limits |
-| Wasabi / OVH | bucket CORS | ✗ / unverified | treat as false until verified |
-| GCS | CORS | ✓ native (`ifGenerationMatch`) — **not** via S3/XML | add a native adapter for CAS |
-| Azure Blob | account CORS | ✓ native (ETag `If-Match`) | not S3; add a native adapter |
+| Backend | Adapter | CAS (use-limits) |
+|---|---|---|
+| AWS S3 | `S3ObjectStore` | ✓ (`If-None-Match` Aug 2024, `If-Match` Nov 2024) |
+| Cloudflare R2 | `S3ObjectStore` | ✓ (`If-Match`/`If-None-Match`) |
+| MinIO | `S3ObjectStore` (`forcePathStyle`) | ✓ |
+| Google Cloud Storage | `GcsObjectStore` (native) | ✓ (`ifGenerationMatch`) |
+| Azure Blob | `AzureObjectStore` (native) | ✓ (ETag `If-Match`) |
+| Backblaze B2 | `S3ObjectStore` (`conditionalWrite:false`) | ✗ — backend has no conditional write |
+| Wasabi / OVH | `S3ObjectStore` (`conditionalWrite:false`) | ✗ / unverified |
 
-The CAS column is what gates **use-limits**: AWS S3, R2, and MinIO get it through
-the shipped `S3ObjectStore`; GCS and Azure have strong native CAS but need a native
-adapter (their S3/XML ETag preconditions are read-only). The honesty rule binds UI
-to capability: `create` throws `unsupported_control` for `maxUses` on a non-CAS
-backend rather than miscounting.
+Use-limits work everywhere CAS is ✓ — i.e. on every major provider; only B2 and
+Wasabi/OVH lack the primitive (a backend limitation, not an adapter gap), and
+there the manager throws `unsupported_control` for `maxUses` (honesty rule) while
+everything else — revoke, expiry, passcode, pause, audit — still works. Every
+backend also needs a CORS rule for the service origin; with the service in the read
+path the bucket itself can stay private.
+
+> Verification status: the in-memory adapter is fully tested in CI. The cloud
+> adapters are written to the conformance contract; certify each against a real
+> bucket or its emulator (MinIO / fake-gcs-server / Azurite) before production.
 
 ## 7. Security & privacy
 

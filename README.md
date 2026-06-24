@@ -37,9 +37,18 @@ STORE=s3 S3_BUCKET=my-bucket S3_REGION=auto \
 ```
 
 The service is in the read path, so the bucket can stay **private** — browsers
-fetch the ciphertext from the service (`/shl/:id`), which sets CORS. Use a
-conditional-write-capable backend (S3/R2/MinIO) if you want `maxUses`; see
-`docs/api-design.md` §6.
+fetch the ciphertext from the service (`/shl/:id`), which sets CORS.
+
+**Backends** (set `STORE=`): `s3` covers AWS S3, Cloudflare R2, MinIO, Backblaze
+B2, and Wasabi; `gcs` is a native Google Cloud Storage adapter; `azure` is a
+native Azure Blob adapter; `memory` is for dev. `maxUses` needs compare-and-swap,
+which every major provider supports — AWS S3, R2, MinIO, GCS, and Azure all do.
+Only Backblaze B2 and Wasabi lack it (a provider limitation): there you set
+`S3_CONDITIONAL_WRITE=0`, `maxUses` is refused, and everything else still works.
+
+The cloud adapters share one contract, pinned by `test/conformance.ts` (run in CI
+against memory; run it against a real bucket or an emulator — MinIO /
+fake-gcs-server / Azurite — to certify a provider). See `docs/api-design.md` §6.
 
 ## The blind flow (client ↔ service)
 
@@ -77,11 +86,13 @@ src/
   crypto.ts         compact JWE (ported from the IG viewer) + hashing/HMAC helpers
   shlink.ts         shlink:/ encode/decode + viewer link
   object-store.ts   the ObjectStore port + MemoryObjectStore
-  stores/s3.ts      S3-compatible adapter (AWS/R2/MinIO/B2/Wasabi/GCS-XML)
+  stores/s3.ts      S3-compatible adapter (AWS S3 / R2 / MinIO / B2 / Wasabi)
+  stores/gcs.ts     native Google Cloud Storage adapter
+  stores/azure.ts   native Azure Blob adapter
   share-manager.ts  the high-level API: create/resolve/revoke/… + CAS counting
   server.ts         framework-agnostic fetch handler (data + control plane)
   client.ts         CLIENT side of the blind boundary (encrypt + compose link)
   index.ts          env wiring + Bun.serve
-test/               manager + http round-trip tests
+test/               manager + http tests, and conformance.ts (the ObjectStore contract)
 docs/               api-design.md (authoritative) + background-prd.md
 ```
