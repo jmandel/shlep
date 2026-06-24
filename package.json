@@ -1,0 +1,26 @@
+{
+  "name": "shlep",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "shlep (SHL Encrypted Proxy) — schlep your health data anywhere: blind, revocable SMART Health Links backed by any cloud object store.",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "test": "bun test",
+    "build:site": "bun run scripts/build-site.ts",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.6.0",
+    "esbuild": "^0.24.0"
+  },
+  "peerDependencies": {
+    "@aws-sdk/client-s3": "^3.700.0",
+    "@aws-sdk/s3-request-presigner": "^3.700.0"
+  },
+  "peerDependenciesMeta": {
+    "@aws-sdk/client-s3": { "optional": true },
+    "@aws-sdk/s3-request-presigner": { "optional": true }
+  }
+}
