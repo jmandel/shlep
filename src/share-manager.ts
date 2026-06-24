@@ -28,6 +28,7 @@
  */
 import { hmacHex, randomId, randomToken, sha256Hex, timingSafeEqualHex } from "./crypto";
 import type { ObjectStore } from "./object-store";
+import { hashPasscode, verifyPasscode } from "./passcode";
 import {
   type CreateInput,
   type CreateResult,
@@ -104,7 +105,7 @@ export class ShareManager {
 
     const token = randomToken(); // the service mints the manage token and returns it once
     const manageTokenHash = await sha256Hex(token);
-    const passcodeHash = policy.passcode != null ? await sha256Hex(policy.passcode) : undefined;
+    const passcodeHash = policy.passcode != null ? await hashPasscode(policy.passcode) : undefined;
 
     // 1) RESERVE the id by writing the sidecar create-if-absent (atomic id
     // allocation: a 128-bit collision is retried, never clobbers anything).
@@ -189,7 +190,7 @@ export class ShareManager {
       const { record, etag } = loaded;
 
       if (record.passcodeHash != null) {
-        const ok = opts.passcode != null && timingSafeEqualHex(await sha256Hex(opts.passcode), record.passcodeHash);
+        const ok = opts.passcode != null && (await verifyPasscode(opts.passcode, record.passcodeHash));
         if (!ok) throw Errors.passcodeRequired();
       }
       if (!this.isServable(record)) throw Errors.notServable();

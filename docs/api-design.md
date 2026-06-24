@@ -242,10 +242,14 @@ path the bucket itself can stay private.
   resolve, and the service refuses to hand back the ciphertext unless it matches —
   a second factor on top of link possession. The host sees the passcode (it's the
   enforcement point) but still only ever holds ciphertext it can't read, so this is
-  fully compatible with content-blindness. Stored only as a hash (defense in depth
-  against sidecar exfiltration; a per-share salt would harden it further).
+  fully compatible with content-blindness. Stored with **salted scrypt** (per-share
+  salt + memory-hard work factor) as defense in depth against sidecar exfiltration.
 - **Recipient:** likewise transmitted to the service in cleartext by SHL design, so
   recipient logging (`audit`) is opt-in to keep that metadata off the host by default.
+- **Nonce uniqueness:** `encryptCompact` always mints a fresh random 96-bit IV
+  (there is no way to pin one), and the client mints a fresh content key per share
+  — so a key is never reused across files. The SHL unique-nonce-per-encryption
+  requirement is met structurally, not by convention.
 - **Unguessable ids:** 128-bit random, base64url (keeps the shlink `url` short).
 - **Enumeration resistance:** uniform 404 for non-servable links and for wrong
   capability tokens.

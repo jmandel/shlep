@@ -79,7 +79,6 @@ async function importAesKey(keyBytes: Uint8Array) {
 export interface EncryptOptions {
   deflate?: boolean; // default false (see file header)
   contentType?: string;
-  iv?: Uint8Array;
 }
 
 export async function encryptCompact(plaintext: string, keyBytes: Uint8Array, opts: EncryptOptions = {}): Promise<string> {
@@ -90,7 +89,10 @@ export async function encryptCompact(plaintext: string, keyBytes: Uint8Array, op
   const protectedB64 = b64uFromStr(JSON.stringify(header));
   let payload = enc.encode(plaintext);
   if (deflate) payload = await pipe(payload, "deflate");
-  const iv = opts.iv ? new Uint8Array(opts.iv) : globalThis.crypto.getRandomValues(new Uint8Array(12));
+  // SHL requires a unique nonce per encryption (the key may be reused across a
+  // link's files/updates). We always generate a fresh random 96-bit IV — there
+  // is deliberately no way to pin it, so nonce reuse is structurally impossible.
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
   const ctAndTag = new Uint8Array(
     await subtle.encrypt({ name: "AES-GCM", iv, additionalData: enc.encode(protectedB64), tagLength: 128 }, key, payload),
   );
