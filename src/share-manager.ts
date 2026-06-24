@@ -115,7 +115,6 @@ export class ShareManager {
       const record: ShareRecord = {
         id,
         status: "active",
-        createdAt: nowSec(),
         flag: "U",
         cipherKey: this.cipherKeyFor(id),
         cipherLen: cipherBytes.length,
@@ -313,7 +312,6 @@ export class ShareManager {
     return {
       id: r.id,
       status: this.effectiveStatus(r),
-      createdAt: r.createdAt,
       flag: r.flag,
       exp: r.exp,
       maxUses: r.maxUses,

@@ -50,7 +50,6 @@ export interface RecipientEntry {
 export interface ShareRecord {
   id: string;
   status: ShareStatus;
-  createdAt: number;
   flag: string; // SHL flags; "U" = the direct-file retrieval rail (GET)
   cipherKey: string; // object-store key of the ciphertext
   cipherLen: number;
@@ -67,7 +66,6 @@ export interface ShareRecord {
 export interface ShareView {
   id: string;
   status: EffectiveStatus;
-  createdAt: number;
   flag: string;
   exp?: number;
   maxUses?: number;

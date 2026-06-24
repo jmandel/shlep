@@ -233,13 +233,19 @@ path the bucket itself can stay private.
 - **Blind host:** ciphertext + hashed token + opaque metadata only; the key,
   plaintext, and the human label never arrive. The label is carried only in the
   link fragment (client-side); the service stores none of it.
-- **Irreducible metadata:** what the host *must* hold to enforce controls —
-  existence, `status`, `exp`, `maxUses`/`useCount`, `cipherLen`, and the token
-  hash. Nothing human-readable beyond that. `createdAt` is the one convenience
-  field (the object store already records it).
-- **Inherently host-visible (by SHL design):** a `passcode` is transmitted to the
-  service by the receiver on each resolve, and `recipient` likewise — so neither
-  is hidden from the host. `audit` (recipient logging) is therefore opt-in.
+- **Irreducible metadata:** the sidecar holds only what the host *must* have to
+  enforce controls — `status`, `exp`, `maxUses`/`useCount`, `cipherLen`, the token
+  hash (and a passcode hash if set). Nothing else: no label, no timestamps. If a
+  field isn't needed to enforce something, it isn't stored (the object store
+  already records creation time if you ever need it).
+- **Passcode (a gate, not content):** the receiver sends it to the service on each
+  resolve, and the service refuses to hand back the ciphertext unless it matches —
+  a second factor on top of link possession. The host sees the passcode (it's the
+  enforcement point) but still only ever holds ciphertext it can't read, so this is
+  fully compatible with content-blindness. Stored only as a hash (defense in depth
+  against sidecar exfiltration; a per-share salt would harden it further).
+- **Recipient:** likewise transmitted to the service in cleartext by SHL design, so
+  recipient logging (`audit`) is opt-in to keep that metadata off the host by default.
 - **Unguessable ids:** 128-bit random, base64url (keeps the shlink `url` short).
 - **Enumeration resistance:** uniform 404 for non-servable links and for wrong
   capability tokens.
