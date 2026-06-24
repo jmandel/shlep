@@ -40,7 +40,7 @@ const toBytes = async (body: any): Promise<Uint8Array> => {
   if (typeof body.transformToByteArray === "function") return new Uint8Array(await body.transformToByteArray());
   const chunks: Uint8Array[] = [];
   for await (const c of body as AsyncIterable<Uint8Array>) chunks.push(c);
-  return new Uint8Array(await new Blob(chunks).arrayBuffer());
+  return new Uint8Array(Buffer.concat(chunks));
 };
 
 export class S3ObjectStore implements ObjectStore {

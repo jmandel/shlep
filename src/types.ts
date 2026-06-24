@@ -50,7 +50,12 @@ export interface RecipientEntry {
   recipient: string;
 }
 
-/** The SHL-defined content types describing a file's DECRYPTED payload. */
+/** The SHL-defined content types describing a file's DECRYPTED payload (closed set). */
+export const ALLOWED_CONTENT_TYPES = [
+  "application/fhir+json",
+  "application/smart-health-card",
+  "application/smart-api-access",
+] as const;
 export const DEFAULT_CONTENT_TYPE = "application/fhir+json";
 
 /** One encrypted file within a share. The cipherKey is server-internal. */

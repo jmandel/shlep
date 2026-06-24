@@ -55,6 +55,15 @@ describe("http", () => {
     expect((await h(new Request(`http://t/shl/${id}?recipient=x`))).status).toBe(404);
   });
 
+  test("oversized request body -> 413 (capped before buffering)", async () => {
+    const mgr = new ShareManager({ store: new MemoryObjectStore(), baseUrl: "http://t" });
+    const h = createFetchHandler(mgr, { maxBodyBytes: 64 });
+    const r = await h(
+      new Request("http://t/shares", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ciphertext: "x".repeat(500) }) }),
+    );
+    expect(r.status).toBe(413);
+  });
+
   test("CORS preflight covers control-plane methods + Authorization", async () => {
     const h = handler();
     const pre = await h(new Request("http://t/shares/x", { method: "OPTIONS" }));

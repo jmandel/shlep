@@ -261,6 +261,25 @@ describe("setPasscode", () => {
   });
 });
 
+describe("review fixes", () => {
+  test("an inactive (expired) passcoded share returns a uniform 404, not a 401 leak", async () => {
+    const { mgr } = mk();
+    const past = Math.floor(Date.now() / 1000) - 10;
+    const res = await mgr.create({ ciphertext: (await encryptBundle(BUNDLE)).jwe, policy: { passcode: "1234", exp: past } });
+    const e = await catchErr(mgr.resolveManifest(res.id, { recipient: "r", passcode: "wrong" }));
+    expect(e.httpStatus).toBe(404); // servability checked before passcode
+    expect((e.body as any)?.remainingAttempts).toBeUndefined(); // no leak
+  });
+
+  test("invalid contentType is rejected (400)", async () => {
+    const { mgr } = mk();
+    expect((await catchErr(mgr.create({ ciphertext: "x", contentType: "text/plain" }))).httpStatus).toBe(400);
+    // a valid SHL contentType is accepted
+    const ok = await mgr.create({ ciphertext: "x", contentType: "application/smart-health-card" });
+    expect((await mgr.get(ok.id, ok.manageToken)).files[0]!.contentType).toBe("application/smart-health-card");
+  });
+});
+
 describe("no-write fast path", () => {
   test("an unlimited, unaudited resolve performs no sidecar write (useCount stays 0)", async () => {
     const { mgr } = mk();

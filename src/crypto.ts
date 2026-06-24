@@ -15,10 +15,12 @@
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 const subtle = globalThis.crypto.subtle;
+/** Coerce a Uint8Array to BufferSource (TS 5.7+ narrowed Uint8Array<ArrayBuffer> for WebCrypto). */
+const bs = (u: Uint8Array): BufferSource => u as BufferSource;
 
 export function b64uFromBytes(bytes: Uint8Array): string {
   let s = "";
-  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]!);
   return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 export function bytesFromB64u(b64u: string): Uint8Array {
@@ -67,13 +69,13 @@ export async function hmacHex(secret: string, message: string): Promise<string> 
 async function pipe(bytes: Uint8Array, mode: "deflate" | "inflate"): Promise<Uint8Array> {
   const stream = mode === "deflate" ? new CompressionStream("deflate-raw") : new DecompressionStream("deflate-raw");
   const w = stream.writable.getWriter();
-  w.write(bytes);
+  w.write(bs(bytes));
   w.close();
   return new Uint8Array(await new Response(stream.readable).arrayBuffer());
 }
 async function importAesKey(keyBytes: Uint8Array) {
   if (keyBytes.length !== 32) throw new Error(`A256GCM key must be 32 bytes, got ${keyBytes.length}`);
-  return subtle.importKey("raw", keyBytes, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+  return subtle.importKey("raw", bs(keyBytes), { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
 }
 
 export interface EncryptOptions {
@@ -87,14 +89,14 @@ export async function encryptCompact(plaintext: string, keyBytes: Uint8Array, op
   const key = await importAesKey(keyBytes);
   const header = { alg: "dir", enc: "A256GCM", ...(deflate ? { zip: "DEF" } : {}), cty: contentType };
   const protectedB64 = b64uFromStr(JSON.stringify(header));
-  let payload = enc.encode(plaintext);
+  let payload: Uint8Array = enc.encode(plaintext);
   if (deflate) payload = await pipe(payload, "deflate");
   // SHL requires a unique nonce per encryption (the key may be reused across a
   // link's files/updates). We always generate a fresh random 96-bit IV — there
   // is deliberately no way to pin it, so nonce reuse is structurally impossible.
   const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
   const ctAndTag = new Uint8Array(
-    await subtle.encrypt({ name: "AES-GCM", iv, additionalData: enc.encode(protectedB64), tagLength: 128 }, key, payload),
+    await subtle.encrypt({ name: "AES-GCM", iv, additionalData: bs(enc.encode(protectedB64)), tagLength: 128 }, key, bs(payload)),
   );
   const ct = ctAndTag.slice(0, ctAndTag.length - 16);
   const tag = ctAndTag.slice(ctAndTag.length - 16);
@@ -112,8 +114,8 @@ export async function decryptCompact(jwe: string, keyBytes: Uint8Array): Promise
   const data = new Uint8Array(ct.length + tag.length);
   data.set(ct);
   data.set(tag, ct.length);
-  let plain = new Uint8Array(
-    await subtle.decrypt({ name: "AES-GCM", iv, additionalData: enc.encode(protectedB64), tagLength: 128 }, key, data),
+  let plain: Uint8Array = new Uint8Array(
+    await subtle.decrypt({ name: "AES-GCM", iv: bs(iv), additionalData: bs(enc.encode(protectedB64)), tagLength: 128 }, key, bs(data)),
   );
   if (header.zip === "DEF") plain = await pipe(plain, "inflate");
   return dec.decode(plain);

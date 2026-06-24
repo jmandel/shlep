@@ -29,11 +29,13 @@
  */
 import { renderLlmsTxt } from "./llms";
 import type { ShareManager } from "./share-manager";
-import { ShlError } from "./types";
+import { Errors, ShlError } from "./types";
 
 export interface ServerOptions {
   /** If set, `POST /shares` requires this bearer token (otherwise create is open). */
   createToken?: string;
+  /** Max request body bytes, buffered before parsing (DoS guard). Default 16 MiB. */
+  maxBodyBytes?: number;
 }
 
 // Browser clients use both the data plane and the control plane (the README
@@ -62,10 +64,12 @@ const errResponse = (e: unknown, dataPlane = false) => {
 
 const bearer = (req: Request): string | null => {
   const m = (req.headers.get("authorization") || "").match(/^Bearer\s+(.+)$/i);
-  return m ? m[1] : null;
+  return m?.[1] ?? null;
 };
 
 export function createFetchHandler(mgr: ShareManager, opts: ServerOptions = {}) {
+  const maxBody = opts.maxBodyBytes ?? 16 * 1024 * 1024;
+  const readJson = (req: Request) => readJsonBounded(req, maxBody);
   return async function handle(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const seg = url.pathname.split("/").filter(Boolean); // e.g. ["shl","abc"]
@@ -89,7 +93,7 @@ export function createFetchHandler(mgr: ShareManager, opts: ServerOptions = {}) 
     try {
       // ---- data plane ----
       if (seg[0] === "shl" && seg.length === 2) {
-        const id = seg[1];
+        const id = seg[1]!;
         if (method === "GET") {
           const recipient = url.searchParams.get("recipient");
           if (!recipient) return json({ error: "bad_request", message: "recipient query parameter is required" }, 400, NOSTORE);
@@ -110,7 +114,7 @@ export function createFetchHandler(mgr: ShareManager, opts: ServerOptions = {}) 
         }
       }
       if (seg[0] === "shl" && seg.length === 4 && seg[2] === "f" && method === "GET") {
-        const r = await mgr.resolveFileTicket(seg[1], seg[3], url.searchParams.get("t") ?? "");
+        const r = await mgr.resolveFileTicket(seg[1]!, seg[3]!, url.searchParams.get("t") ?? "");
         return jose(r.jwe);
       }
 
@@ -125,7 +129,7 @@ export function createFetchHandler(mgr: ShareManager, opts: ServerOptions = {}) 
           const res = await mgr.create({ ciphertext: body.ciphertext, contentType: body.contentType, files: body.files, policy: body.policy });
           return json(res, 201);
         }
-        const id = seg[1];
+        const id = seg[1]!;
         const token = bearer(req) ?? "";
         if (seg.length === 2 && method === "GET") return json(await mgr.get(id, token));
         if (seg.length === 2 && method === "DELETE") return json(await mgr.revoke(id, token));
@@ -139,10 +143,10 @@ export function createFetchHandler(mgr: ShareManager, opts: ServerOptions = {}) 
         if (seg.length === 4 && seg[2] === "files" && method === "PUT") {
           const b = await readJson(req);
           if (typeof b.ciphertext !== "string") return json({ error: "bad_request", message: "ciphertext (compact JWE string) required" }, 400);
-          return json(await mgr.replaceFile(id, token, seg[3], b.ciphertext, b.contentType));
+          return json(await mgr.replaceFile(id, token, seg[3]!, b.ciphertext, b.contentType));
         }
         if (seg.length === 4 && seg[2] === "files" && method === "DELETE") {
-          return json(await mgr.deleteFile(id, token, seg[3]));
+          return json(await mgr.deleteFile(id, token, seg[3]!));
         }
 
         // settings
@@ -163,9 +167,28 @@ export function createFetchHandler(mgr: ShareManager, opts: ServerOptions = {}) 
   };
 }
 
-async function readJson(req: Request): Promise<any> {
+/** Read + parse a JSON body, capping bytes BEFORE buffering the whole thing (DoS guard). */
+async function readJsonBounded(req: Request, maxBytes: number): Promise<any> {
+  const cl = req.headers.get("content-length");
+  if (cl && Number(cl) > maxBytes) throw Errors.tooLarge("request body too large");
+  const reader = req.body?.getReader();
+  if (!reader) return {};
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.length;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw Errors.tooLarge("request body too large");
+    }
+    chunks.push(value);
+  }
+  if (total === 0) return {};
   try {
-    return (await req.json()) ?? {};
+    return JSON.parse(new TextDecoder().decode(Buffer.concat(chunks)));
   } catch {
     return {};
   }

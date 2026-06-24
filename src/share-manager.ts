@@ -24,6 +24,7 @@ import { hmacHex, randomId, randomToken, sha256Hex, timingSafeEqualHex } from ".
 import type { ObjectStore } from "./object-store";
 import { hashPasscode, verifyPasscode } from "./passcode";
 import {
+  ALLOWED_CONTENT_TYPES,
   type Ciphertext,
   type CreateInput,
   type CreateResult,
@@ -125,6 +126,9 @@ export class ShareManager {
     const bytes = toBytes(isWrapped ? (f as any).ciphertext : (f as Ciphertext));
     const contentType = isWrapped ? ((f as any).contentType ?? DEFAULT_CONTENT_TYPE) : DEFAULT_CONTENT_TYPE;
     if (bytes.length > this.maxFileBytes) throw Errors.tooLarge(`file exceeds ${this.maxFileBytes} bytes`);
+    if (!(ALLOWED_CONTENT_TYPES as readonly string[]).includes(contentType)) {
+      throw Errors.badRequest(`contentType must be one of ${ALLOWED_CONTENT_TYPES.join(", ")}`);
+    }
     return { bytes, contentType };
   }
 
@@ -247,12 +251,15 @@ export class ShareManager {
       if (!loaded) throw Errors.notServable();
       const { record, etag } = loaded;
 
+      // Servability (revoked/expired/exhausted/paused) is checked FIRST, so an
+      // inactive share returns a uniform 404 and never leaks via a 401 or burns
+      // the passcode budget.
+      if (!this.isServable(record)) throw Errors.notServable();
       if (record.passcodeHash != null) {
         if (record.passcodeFailures >= this.maxPasscodeFailures) throw Errors.notServable(); // disabled by brute-force budget
         const ok = opts.passcode != null && (await verifyPasscode(opts.passcode, record.passcodeHash));
         if (!ok) throw Errors.passcodeRequired(await this.recordPasscodeFailure(id));
       }
-      if (!this.isServable(record)) throw Errors.notServable();
 
       const mustWrite = record.maxUses != null || record.audit === true;
       if (!mustWrite) return record; // read-only resolve

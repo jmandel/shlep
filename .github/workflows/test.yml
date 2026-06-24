@@ -7,14 +7,15 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Fast path: manager + server + the ObjectStore contract against the in-memory
-  # store. No Docker, no SDKs needed beyond install.
+  # Fast path: typecheck + manager + server + the ObjectStore contract against the
+  # in-memory store. No Docker, no SDKs needed beyond install.
   unit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
+      - run: bun run typecheck
       - run: bun test
 
   # Certify the cloud adapters against real wire behavior via emulators:

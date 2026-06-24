@@ -31,7 +31,7 @@ async function streamToU8(stream: NodeJS.ReadableStream | undefined): Promise<Ui
   for await (const c of stream as AsyncIterable<Uint8Array | string>) {
     chunks.push(typeof c === "string" ? new TextEncoder().encode(c) : new Uint8Array(c));
   }
-  return new Uint8Array(await new Blob(chunks).arrayBuffer());
+  return new Uint8Array(Buffer.concat(chunks));
 }
 
 export class AzureObjectStore implements ObjectStore {
