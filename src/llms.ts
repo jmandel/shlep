@@ -66,6 +66,41 @@ export function renderLlmsTxt(info: ServiceInfo): string {
 5. **A recipient opens the link.** Their viewer fetches the ciphertext from this server and
    decrypts it locally with the key from the fragment.
 
+## What goes where
+
+- **SHLink \`url\`:** the short receiver-facing endpoint, usually \`${b}/shl/<id>\`. It
+  identifies the encrypted share but contains no key material.
+- **SHLink \`key\`:** a 43-character base64url AES-256 key. It lives in the URL fragment
+  after \`#shlink:/\`, so browsers do not send it to this server.
+- **SHLink \`label\`:** optional display text for the viewer. It also lives only in the
+  fragment; the server never receives or stores it.
+- **\`manageToken\`:** the creator's capability token for revoke, pause/resume, file changes,
+  expiry, limits, passcode, and logs. It is returned once by \`POST /shares\`; never put it
+  in the recipient's SHLink.
+- **\`recipient\`:** the viewer/recipient name sent on every resolve. It is required by SHL,
+  consumed by this service, and logged only when \`audit: true\`.
+- **\`passcode\`:** an optional access gate for the manifest rail. It is not a decryption key,
+  is not placed in the SHLink, and is never compatible with the \`U\` direct-file rail.
+
+Minimal SHLink fragment payload:
+
+\`\`\`json
+{
+  "url": "${b}/shl/<id>",
+  "key": "<43-char base64url AES-256 key>",
+  "flag": "U",
+  "label": "optional viewer text",
+  "exp": 1735689600,
+  "v": 1
+}
+\`\`\`
+
+\`url\` and \`key\` are required. \`v\` should be \`1\`. \`label\`, \`exp\`, and \`flag\`
+are optional. Valid flags are \`L\`, \`P\`, and \`U\`; shlep canonicalizes them in \`LPU\`
+order and rejects unknown flags. \`U\` means direct GET. \`P\` means passcode-required
+manifest POST. \`L\` marks long-term/evolving content for viewers that understand re-polling.
+\`U\` and \`P\` are mutually exclusive.
+
 ## API
 
 All ids are server-minted (256-bit random). Labels are **not** sent to the server — they
@@ -75,6 +110,12 @@ A share holds **one or more files**. Recipients read via the manifest (any count
 the share has **exactly one file**, the single-GET shortcut (the SHL \`U\` flag). A \`U\` link
 is your assertion of one file; if the share ever has 0 or 2+ files, only that GET shortcut
 404s — the manifest still works.
+
+For the common one-file, non-passcoded share, prefer the **\`U\` direct-file rail**: it is the
+simplest receiver experience, returns the JWE directly, and works with clients that only
+implement the direct SHL fetch. Use the manifest rail when you need multi-file shares,
+passcode protection, explicit content types per file, or \`embeddedLengthMax\` handling with
+short-lived \`location\` tickets.
 
 ### Data plane (public; CORS \`*\`)
 
@@ -89,6 +130,20 @@ GET  ${b}/shl/:id/f/:fileId?t=<ticket>  -> 200 application/jose   (manifest "loc
 \`recipient\` is required by the SHL spec; this server consumes it (never forwards it to
 storage) and logs it only if the share enabled \`audit\`. Any non-servable link — missing,
 revoked, expired, exhausted, or paused — returns a **uniform 404** so existence never leaks.
+
+Manifest response examples:
+
+\`\`\`json
+{ "files": [ { "contentType": "application/fhir+json", "embedded": "<COMPACT_JWE>" } ] }
+\`\`\`
+
+\`\`\`json
+{ "files": [ { "contentType": "application/fhir+json", "location": "${b}/shl/<id>/f/<fileId>?t=<ticket>" } ] }
+\`\`\`
+
+\`embedded\` is the compact JWE inline. \`location\` is a short-lived URL minted by this
+service for a specific file; receivers fetch it with GET and then decrypt the returned JWE
+with the same fragment key. Do not construct or accept arbitrary caller-supplied locations.
 
 ### Control plane (\`Authorization: Bearer <manageToken>\`; wrong/missing token -> 404)
 
@@ -111,6 +166,26 @@ GET    ${b}/shares/:id/log               recipient access log (entries exist onl
 plus optional \`"policy"\`. \`policy = { exp?: epochSeconds, maxUses?: number, passcode?: string,
 audit?: boolean }\`. Updates keep the same key/link (re-encrypt with a fresh IV). There is
 **no list-all/admin endpoint** — the service is account-less and never enumerates shares.
+
+Create request shapes:
+
+\`\`\`json
+{ "ciphertext": "<COMPACT_JWE>", "contentType": "application/fhir+json" }
+\`\`\`
+
+\`\`\`json
+{
+  "files": [
+    { "ciphertext": "<FHIR_BUNDLE_JWE>", "contentType": "application/fhir+json" },
+    { "ciphertext": "<SMART_CARD_JWE>", "contentType": "application/smart-health-card" }
+  ],
+  "policy": { "exp": 1735689600, "maxUses": 5, "passcode": "1234", "audit": true }
+}
+\`\`\`
+
+The response includes \`fileUrl\` for the SHLink \`url\`, \`fileIds\` for later file
+operations, and \`manageToken\` for control-plane calls. Save \`manageToken\` immediately;
+the service stores only its hash.
 
 ## Quickstart
 

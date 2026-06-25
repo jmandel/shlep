@@ -103,6 +103,9 @@ describe("http", () => {
     expect(t1).toContain("**open**");
     expect(t1).toContain("https://github.com/jmandel/shlep");
     expect(t1).toContain("2³² messages per key"); // the nonce guidance
+    expect(t1).toContain("## What goes where");
+    expect(t1).toContain("prefer the **`U` direct-file rail**");
+    expect(t1).toContain('"location": "https://open.example/shl/<id>/f/<fileId>?t=<ticket>"');
 
     const gated = createFetchHandler(new ShareManager({ store: new MemoryObjectStore(), baseUrl: "https://g.example" }), {
       createToken: "secret",
