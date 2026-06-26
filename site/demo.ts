@@ -48,11 +48,11 @@ ready(() => {
       lastKey = sealed.key;
       lastJwe = sealed.jwe;
       const fileUrl = "https://shlep.example/shl/" + sealed.keyB64.slice(0, 16);
-      const shlink = composeShlink(fileUrl, sealed.keyB64, { label: "Cycle export" });
+      const shlink = composeShlink(fileUrl, sealed.keyB64, { label: "Example export" });
 
       $("out-cipher").textContent = trunc(sealed.jwe, 160);
       $("out-key").textContent = sealed.keyB64;
-      $("out-link").textContent = "https://cycle.fhir.me/view/#" + trunc(shlink, 120);
+      $("out-link").textContent = "https://viewer.example.org/#" + trunc(shlink, 120);
       $("results").classList.add("show");
       $("roundtrip").textContent = "";
     } catch (e) {

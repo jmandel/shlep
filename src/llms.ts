@@ -9,7 +9,7 @@
 const SOURCE_URL = "https://github.com/jmandel/shlep";
 const SPEC_URL = "https://github.com/jmandel/shlep/blob/main/docs/api-design.md";
 const RAW_SPEC_URL = "https://raw.githubusercontent.com/jmandel/shlep/main/docs/api-design.md";
-const EXAMPLE_VIEWER = "https://cycle.fhir.me/view";
+const EXAMPLE_VIEWER = "https://viewer.example.org/";
 
 export interface ServiceInfo {
   /** This instance's public base URL, e.g. https://shl.example.com */

@@ -85,7 +85,8 @@ const res = await fetch("https://shl.example.com/shares", {
 // 3. CLIENT composes the link with its own key — show as QR + copy/share.
 //    flag:"U" = the single-GET direct-file rail (valid here: one file, no passcode).
 //    Omit `flag` for the manifest rail (any file count, required if passcoded/multi-file).
-const link = composeViewerLink("https://cycle.fhir.me/view", res.fileUrl, sealed.keyB64, { flag: "U", label: "Cycle export" });
+//    Replace the viewer prefix with any SHL-compatible viewer for your workflow.
+const link = composeViewerLink("https://viewer.example.org", res.fileUrl, sealed.keyB64, { flag: "U", label: "Example export" });
 
 // 4. Later: revoke (needs the manage token only — it can't decrypt anything).
 await fetch(`https://shl.example.com/shares/${res.id}`, {
