@@ -9,7 +9,7 @@
 const SOURCE_URL = "https://github.com/jmandel/shlep";
 const SPEC_URL = "https://github.com/jmandel/shlep/blob/main/docs/api-design.md";
 const RAW_SPEC_URL = "https://raw.githubusercontent.com/jmandel/shlep/main/docs/api-design.md";
-const EXAMPLE_VIEWER = "https://periodicity.fhir.me/";
+const EXAMPLE_VIEWER = "https://cycle.fhir.me/view";
 
 export interface ServiceInfo {
   /** This instance's public base URL, e.g. https://shl.example.com */
@@ -50,10 +50,10 @@ export function renderLlmsTxt(info: ServiceInfo): string {
 1. **You encrypt on the client.** Turn your FHIR Bundle (or any UTF-8) into a compact
    JWE: \`alg:"dir"\`, \`enc:"A256GCM"\`, \`cty:"application/fhir+json"\`.
    **Nonce/IV rule:** generate a **random 96-bit IV from a CSPRNG** for *every* encryption,
-   with a hard limit of ~2³² messages per key, then rotate keys. The simplest correct option
-   — and what shlep does — is a **fresh 32-byte key per share**, so each key encrypts
-   essentially one message and IV collisions are a non-issue. (Optional \`zip:"DEF"\`, but
-   prefer uncompressed for unknown viewers.) You can use our reference implementation
+   with a hard limit of ~2³² messages per key, then rotate keys. shlep creates a
+   **fresh 32-byte key per share** and still generates a fresh IV for every file
+   encryption or update under that share key. (Optional \`zip:"DEF"\`, but prefer
+   uncompressed for unknown viewers.) You can use our reference implementation
    directly or translate it: \`src/crypto.ts\` (compact JWE) and \`src/client.ts\` (encrypt +
    link helpers) at ${SOURCE_URL}.
 2. **You upload only the ciphertext.** The key NEVER touches this server.

@@ -52,7 +52,7 @@ ready(() => {
 
       $("out-cipher").textContent = trunc(sealed.jwe, 160);
       $("out-key").textContent = sealed.keyB64;
-      $("out-link").textContent = "https://periodicity.fhir.me/#" + trunc(shlink, 120);
+      $("out-link").textContent = "https://cycle.fhir.me/view/#" + trunc(shlink, 120);
       $("results").classList.add("show");
       $("roundtrip").textContent = "";
     } catch (e) {

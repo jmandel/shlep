@@ -211,7 +211,7 @@ else is a data-plane 404.
 
 - **create** **reserves the id by writing the sidecar create-if-absent first,**
   then writes the ciphertext object(s). Reserving first makes id allocation atomic: the id
-  is 128-bit random and **server-minted** (clients never choose it), and a
+  is 256-bit random and **server-minted** (clients never choose it), and a
   collision — cosmically unlikely — is **retried with a fresh id**, never
   surfaced, and can never clobber an existing share's ciphertext (whose key is
   derived from the id; a "ciphertext-first" write *would* clobber it). A crash
@@ -312,10 +312,8 @@ path the bucket itself can stay private.
   can encrypt many messages. Use a **random 96-bit IV from a CSPRNG, cap a key at
   ~2³² messages, then rotate keys** — the simplest correct option. `encryptCompact`
   always mints a fresh random IV and offers no way to pin one, so re-encrypting or
-  adding a file never reuses a nonce. (shlep's HTTP surface today hosts one file per
-  share with no in-place update, so a key usually encrypts once — but the rule is
-  what keeps multi-file/update flows safe, and the reference crypto enforces it
-  regardless.) Clients can adopt `src/crypto.ts` + `src/client.ts` or translate them.
+  adding a file never reuses a nonce. Clients can adopt `src/crypto.ts` +
+  `src/client.ts` or translate them.
 - **Unguessable ids:** 256-bit random, base64url (43 chars; SHL entropy requirement).
 - **Enumeration resistance:** uniform 404 for non-servable links and for wrong
   capability tokens.
@@ -352,7 +350,7 @@ The PRD left these open; here is the resolution implemented in `../src`:
 2. **Control-plane auth** — per-share capability token (bearer), `sha256` at rest,
    404 on mismatch. No accounts/tenants and no list-all endpoint; optional
    `createToken` gates who may create.
-3. **Create/revoke atomicity & id conflicts** — clients never pick the id (128-bit
+3. **Create/revoke atomicity & id conflicts** — clients never pick the id (256-bit
    server-minted). Create **reserves the id via sidecar create-if-absent first**,
    retrying a fresh id on the ~impossible collision (never surfaced, never
    clobbers); then writes ciphertext (§5). Revoke: sidecar(revoked)→delete cipher.

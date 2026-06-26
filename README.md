@@ -14,8 +14,9 @@ seeing the content encryption key**.
   unlimited links stay cheap.
 - Runs on Bun (and any Web-standard runtime; the handler is a plain `fetch`).
 
-Spec: [`docs/api-design.md`](./docs/api-design.md). Background exploration:
-[`docs/background-prd.md`](./docs/background-prd.md).
+Spec: [`docs/api-design.md`](./docs/api-design.md). Historical background:
+[`docs/background-prd.md`](./docs/background-prd.md) is design exploration, not
+current API behavior when it differs from the spec or code.
 
 ## Quickstart
 
@@ -84,7 +85,7 @@ const res = await fetch("https://shl.example.com/shares", {
 // 3. CLIENT composes the link with its own key — show as QR + copy/share.
 //    flag:"U" = the single-GET direct-file rail (valid here: one file, no passcode).
 //    Omit `flag` for the manifest rail (any file count, required if passcoded/multi-file).
-const link = composeViewerLink("https://periodicity.fhir.me/", res.fileUrl, sealed.keyB64, { flag: "U", label: "Cycle export" });
+const link = composeViewerLink("https://cycle.fhir.me/view", res.fileUrl, sealed.keyB64, { flag: "U", label: "Cycle export" });
 
 // 4. Later: revoke (needs the manage token only — it can't decrypt anything).
 await fetch(`https://shl.example.com/shares/${res.id}`, {
